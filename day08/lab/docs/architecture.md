@@ -18,7 +18,8 @@
 ```
 
 **Mô tả ngắn gọn:**
-> TODO: Mô tả hệ thống trong 2-3 câu. Nhóm xây gì? Cho ai dùng? Giải quyết vấn đề gì?
+Nhóm xây trợ lý RAG nội bộ cho khối CS + IT Helpdesk để trả lời câu hỏi về policy hoàn tiền, SLA ticket P1, cấp quyền hệ thống và FAQ vận hành.  
+Pipeline được thiết kế theo hướng grounded-answer: chỉ trả lời từ context đã retrieve, có citation nguồn, và abstain khi không đủ dữ liệu để giảm hallucination trong môi trường nội bộ.
 
 ---
 
@@ -27,22 +28,22 @@
 ### Tài liệu được index
 | File | Nguồn | Department | Số chunk |
 |------|-------|-----------|---------|
-| `policy_refund_v4.txt` | policy/refund-v4.pdf | CS | TODO |
-| `sla_p1_2026.txt` | support/sla-p1-2026.pdf | IT | TODO |
-| `access_control_sop.txt` | it/access-control-sop.md | IT Security | TODO |
-| `it_helpdesk_faq.txt` | support/helpdesk-faq.md | IT | TODO |
-| `hr_leave_policy.txt` | hr/leave-policy-2026.pdf | HR | TODO |
+| `policy_refund_v4.txt` | policy/refund-v4.pdf | CS | 6 |
+| `sla_p1_2026.txt` | support/sla-p1-2026.pdf | IT | 5 |
+| `access_control_sop.txt` | it/access-control-sop.md | IT Security | 8 |
+| `it_helpdesk_faq.txt` | support/helpdesk-faq.md | IT | 6 |
+| `hr_leave_policy.txt` | hr/leave-policy-2026.pdf | HR | 5 |
 
 ### Quyết định chunking
 | Tham số | Giá trị | Lý do |
 |---------|---------|-------|
-| Chunk size | TODO tokens | TODO |
-| Overlap | TODO tokens | TODO |
-| Chunking strategy | Heading-based / paragraph-based | TODO |
+| Chunk size | 400 tokens (ước lượng ~1600 ký tự) | Giữ đủ ngữ cảnh cho điều khoản/SLA nhưng vẫn gọn để tránh context quá dài khi ghép top-k |
+| Overlap | 80 tokens (ước lượng ~320 ký tự) | Giảm mất mát thông tin ở ranh giới chunk, đặc biệt khi điều kiện nằm cuối đoạn trước |
+| Chunking strategy | Heading-based + paragraph fallback + overlap | Ưu tiên cắt theo section tự nhiên (`=== ... ===`), sau đó tách paragraph/câu nếu section dài |
 | Metadata fields | source, section, effective_date, department, access | Phục vụ filter, freshness, citation |
 
 ### Embedding model
-- **Model**: TODO (OpenAI text-embedding-3-small / paraphrase-multilingual-MiniLM-L12-v2)
+- **Model**: `nvidia/llama-nemotron-embed-1b-v2` (qua OpenAI-compatible endpoint)
 - **Vector store**: ChromaDB (PersistentClient)
 - **Similarity metric**: Cosine
 
@@ -61,15 +62,15 @@
 ### Variant (Sprint 3)
 | Tham số | Giá trị | Thay đổi so với baseline |
 |---------|---------|------------------------|
-| Strategy | TODO (hybrid / dense) | TODO |
-| Top-k search | TODO | TODO |
-| Top-k select | TODO | TODO |
-| Rerank | TODO (cross-encoder / MMR) | TODO |
-| Query transform | TODO (expansion / HyDE / decomposition) | TODO |
+| Strategy | Hybrid (Dense + Sparse BM25, fuse bằng RRF) | Từ dense-only sang kết hợp semantic + keyword |
+| Top-k search | 10 | Giữ nguyên để cô lập tác động từ retrieval strategy/rerank/query transform |
+| Top-k select | 3 | Giữ nguyên để ổn định chi phí prompt và so sánh công bằng |
+| Rerank | Có (light rerank lexical+dense, top-3) | Bật rerank sau bước search rộng để giảm noise |
+| Query transform | Expansion | Thêm query biến thể/alias trước khi retrieve |
 
 **Lý do chọn variant này:**
-> TODO: Giải thích tại sao chọn biến này để tune.
-> Ví dụ: "Chọn hybrid vì corpus có cả câu tự nhiên (policy) lẫn mã lỗi và tên chuyên ngành (SLA ticket P1, ERR-403)."
+Chọn variant `hybrid + rerank + query expansion` vì corpus có cả mô tả ngôn ngữ tự nhiên (policy/SLA) lẫn alias và keyword đặc thù (ví dụ "Approval Matrix", ticket terms).  
+Kết quả A/B hiện tại cho thấy `Faithfulness` tăng từ **4.40 → 4.60** và `Completeness` tăng từ **3.40 → 3.70**, trong khi `Context Recall` giữ ở **5.00**; đổi lại `Relevance` giảm nhẹ từ **4.50 → 4.30**, nên biến này phù hợp khi ưu tiên độ bám chứng cứ.
 
 ---
 
@@ -96,7 +97,7 @@ Answer:
 ### LLM Configuration
 | Tham số | Giá trị |
 |---------|---------|
-| Model | TODO (gpt-4o-mini / gemini-1.5-flash) |
+| Model | Mặc định `gpt-4o-mini` (`LLM_PROVIDER=openai`), có thể chuyển `gemini-1.5-flash` qua `LLM_PROVIDER=gemini` |
 | Temperature | 0 (để output ổn định cho eval) |
 | Max tokens | 512 |
 
@@ -112,25 +113,34 @@ Answer:
 | Chunking tệ | Chunk cắt giữa điều khoản | `list_chunks()` và đọc text preview |
 | Retrieval lỗi | Không tìm được expected source | `score_context_recall()` trong eval.py |
 | Generation lỗi | Answer không grounded / bịa | `score_faithfulness()` trong eval.py |
-| Token overload | Context quá dài → lost in the middle | Kiểm tra độ dài context_block |
+| Token overload | Context quá dài → lost in the middle | Kiểm tra độ dài `context_block`, giữ `top_k_select=3` |
+| Retrieval yếu nhưng vẫn generate | Top score thấp, dễ hallucinate | Guardrail trong `rag_answer()`: dense mode với `top_score < 0.15` thì abstain sớm |
 
 ---
 
 ## 6. Diagram (tùy chọn)
 
-> TODO: Vẽ sơ đồ pipeline nếu có thời gian. Có thể dùng Mermaid hoặc drawio.
+Sơ đồ dưới đây phản ánh luồng đang chạy trong code (bao gồm cả baseline và variant):
 
 ```mermaid
 graph LR
-    A[User Query] --> B[Query Embedding]
-    B --> C[ChromaDB Vector Search]
-    C --> D[Top-10 Candidates]
-    D --> E{Rerank?}
-    E -->|Yes| F[Cross-Encoder]
-    E -->|No| G[Top-3 Select]
-    F --> G
-    G --> H[Build Context Block]
-    H --> I[Grounded Prompt]
-    I --> J[LLM]
-    J --> K[Answer + Citation]
+    userQuery[UserQuery] --> queryTransform{QueryTransform?}
+    queryTransform -->|No| singleQuery[OriginalQuery]
+    queryTransform -->|Yes| expandedQueries[ExpandedQueries]
+    singleQuery --> retrievalRouter[RetrieveCandidates]
+    expandedQueries --> retrievalRouter
+    retrievalRouter --> densePath[DenseRetriever]
+    retrievalRouter --> sparsePath[SparseRetriever]
+    densePath --> fusion[FuseOrMerge]
+    sparsePath --> fusion
+    fusion --> rerankToggle{UseRerank?}
+    rerankToggle -->|No| topSelect[Top3Select]
+    rerankToggle -->|Yes| rerankStep[ReScoreAndTop3]
+    rerankStep --> topSelect
+    topSelect --> guardrail[LowScoreGuardrail]
+    guardrail -->|WeakRetrieval| abstainOut[AbstainAnswer]
+    guardrail -->|Pass| contextBuild[BuildContextBlock]
+    contextBuild --> groundedPrompt[GroundedPrompt]
+    groundedPrompt --> llmCall[LLMCall]
+    llmCall --> finalAnswer[AnswerWithSources]
 ```
