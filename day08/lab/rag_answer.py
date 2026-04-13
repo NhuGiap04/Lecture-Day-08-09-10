@@ -38,6 +38,9 @@ TOP_K_SELECT = 3     # Số chunk gửi vào prompt sau rerank/select (top-3 swe
 LLM_MODEL = os.getenv("LLM_MODEL", "gpt-4o-mini")
 LLM_PROVIDER = os.getenv("LLM_PROVIDER", "openai").lower()
 
+nvidia_api_key = os.getenv("NVIDIA_API_KEY")
+nvidia_base_url = os.getenv("NVIDIA_BASE_URL")
+
 
 # =============================================================================
 # RETRIEVAL — DENSE (Vector Search)
@@ -333,8 +336,7 @@ def transform_query(query: str, strategy: str = "expansion") -> List[str]:
       - "decomposition": Tách query phức tạp thành 2-3 sub-queries
       - "hyde": Sinh câu trả lời giả (hypothetical document) để embed thay query
 
-    TODO Sprint 3 (nếu chọn query transformation):
-    Gọi LLM với prompt phù hợp với từng strategy.
+    Đã implement query transformation theo heuristic cho từng strategy.
 
     Ví dụ expansion prompt:
         "Given the query: '{query}'
@@ -350,9 +352,51 @@ def transform_query(query: str, strategy: str = "expansion") -> List[str]:
     - Decomposition: query hỏi nhiều thứ một lúc
     - HyDE: query mơ hồ, search theo nghĩa không hiệu quả
     """
-    # TODO Sprint 3: Implement query transformation
-    # Tạm thời trả về query gốc
-    return [query]
+    base = query.strip()
+    if not base:
+        return []
+
+    strategy = strategy.lower().strip()
+    transformed: List[str] = [base]
+
+    alias_map = {
+        "approval matrix": "access control sop",
+        "p1": "critical incident",
+        "hoàn tiền": "refund",
+        "cấp quyền": "access request",
+        "ticket": "jira incident ticket",
+    }
+
+    if strategy == "expansion":
+        q_lower = base.lower()
+        for alias, canonical in alias_map.items():
+            if alias in q_lower:
+                transformed.append(base.lower().replace(alias, canonical))
+                transformed.append(f"{base} {canonical}")
+        transformed.append(f"{base} policy quy trình")
+
+    elif strategy == "decomposition":
+        parts = re.split(r"\?|\bvà\b|\band\b|\,", base, flags=re.IGNORECASE)
+        for part in parts:
+            sub = part.strip(" .")
+            if len(sub) >= 6:
+                transformed.append(sub)
+
+    elif strategy == "hyde":
+        transformed.append(
+            f"Tài liệu nội bộ liên quan đến: {base}. Cung cấp định nghĩa, SLA, điều kiện và quy trình chi tiết."
+        )
+
+    # unique giữ thứ tự
+    uniq: List[str] = []
+    seen = set()
+    for q in transformed:
+        key = q.lower().strip()
+        if key and key not in seen:
+            uniq.append(q)
+            seen.add(key)
+
+    return uniq
 
 
 # =============================================================================
@@ -374,7 +418,7 @@ def build_context_block(chunks: List[Dict[str, Any]]) -> str:
         score = chunk.get("score", 0)
         text = chunk.get("text", "")
 
-        # TODO: Tùy chỉnh format nếu muốn (thêm effective_date, department, ...)
+        # Có thể mở rộng thêm effective_date/department nếu muốn debug sâu hơn.
         header = f"[{i}] {source}"
         if section:
             header += f" | {section}"
@@ -394,7 +438,6 @@ def build_grounded_prompt(query: str, context_block: str) -> str:
     3. Citation: Gắn source/section khi có thể
     4. Short, clear, stable: Output ngắn, rõ, nhất quán
 
-    TODO Sprint 2:
     Đây là prompt baseline. Trong Sprint 3, bạn có thể:
     - Thêm hướng dẫn về format output (JSON, bullet points)
     - Thêm ngôn ngữ phản hồi (tiếng Việt vs tiếng Anh)
@@ -419,8 +462,7 @@ def call_llm(prompt: str) -> str:
     """
     Gọi LLM để sinh câu trả lời.
 
-    TODO Sprint 2:
-    Chọn một trong hai:
+    Đã implement đầy đủ provider routing:
 
     Option A — OpenAI (cần OPENAI_API_KEY):
         from openai import OpenAI
@@ -442,10 +484,54 @@ def call_llm(prompt: str) -> str:
 
     Lưu ý: Dùng temperature=0 hoặc thấp để output ổn định cho evaluation.
     """
-    raise NotImplementedError(
-        "TODO Sprint 2: Implement call_llm().\n"
-        "Chọn Option A (OpenAI) hoặc Option B (Gemini) trong TODO comment."
-    )
+    provider = LLM_PROVIDER
+
+    # Ưu tiên OpenAI chuẩn nếu có key; fallback qua OpenAI-compatible NVIDIA endpoint.
+    if provider == "openai":
+        openai_key = os.getenv("OPENAI_API_KEY")
+        nvidia_key = os.getenv("NVIDIA_API_KEY")
+        nvidia_base_url = os.getenv("NVIDIA_BASE_URL")
+
+        if openai_key:
+            from openai import OpenAI
+
+            client = OpenAI(api_key=openai_key)
+            response = client.chat.completions.create(
+                model=LLM_MODEL,
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0,
+                max_tokens=512,
+            )
+            return (response.choices[0].message.content or "").strip()
+
+        if nvidia_key and nvidia_base_url:
+            from openai import OpenAI
+
+            client = OpenAI(api_key=nvidia_key, base_url=nvidia_base_url)
+            response = client.chat.completions.create(
+                model=LLM_MODEL,
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0,
+                max_tokens=512,
+            )
+            return (response.choices[0].message.content or "").strip()
+
+        raise ValueError("Thiếu OPENAI_API_KEY hoặc bộ NVIDIA_API_KEY/NVIDIA_BASE_URL trong .env")
+
+    if provider == "gemini":
+        gemini_key = os.getenv("GOOGLE_API_KEY")
+        if not gemini_key:
+            raise ValueError("Thiếu GOOGLE_API_KEY trong .env")
+
+        import google.generativeai as genai
+
+        genai.configure(api_key=gemini_key)
+        gemini_model = os.getenv("GEMINI_MODEL", "gemini-1.5-flash")
+        model = genai.GenerativeModel(gemini_model)
+        response = model.generate_content(prompt)
+        return (response.text or "").strip()
+
+    raise ValueError(f"LLM_PROVIDER không hợp lệ: {provider}")
 
 
 def rag_answer(
@@ -454,6 +540,7 @@ def rag_answer(
     top_k_search: int = TOP_K_SEARCH,
     top_k_select: int = TOP_K_SELECT,
     use_rerank: bool = False,
+    query_transform_strategy: Optional[str] = None,
     verbose: bool = False,
 ) -> Dict[str, Any]:
     """
@@ -475,7 +562,7 @@ def rag_answer(
           - "query": query gốc
           - "config": cấu hình pipeline đã dùng
 
-    TODO Sprint 2 — Implement pipeline cơ bản:
+    Đã implement pipeline cơ bản:
     1. Chọn retrieval function dựa theo retrieval_mode
     2. Gọi rerank() nếu use_rerank=True
     3. Truncate về top_k_select chunks
@@ -483,30 +570,53 @@ def rag_answer(
     5. Gọi call_llm() để sinh câu trả lời
     6. Trả về kết quả kèm metadata
 
-    TODO Sprint 3 — Thử các variant:
-    - Variant A: đổi retrieval_mode="hybrid"
-    - Variant B: bật use_rerank=True
-    - Variant C: thêm query transformation trước khi retrieve
+    Variant đã hỗ trợ:
+    - Variant A: retrieval_mode="hybrid"
+    - Variant B: use_rerank=True
+    - Variant C: query_transform_strategy trước khi retrieve
     """
     config = {
         "retrieval_mode": retrieval_mode,
         "top_k_search": top_k_search,
         "top_k_select": top_k_select,
         "use_rerank": use_rerank,
+        "query_transform_strategy": query_transform_strategy,
     }
 
     # --- Bước 1: Retrieve ---
-    if retrieval_mode == "dense":
-        candidates = retrieve_dense(query, top_k=top_k_search)
-    elif retrieval_mode == "sparse":
-        candidates = retrieve_sparse(query, top_k=top_k_search)
-    elif retrieval_mode == "hybrid":
-        candidates = retrieve_hybrid(query, top_k=top_k_search)
-    else:
+    queries = (
+        transform_query(query, strategy=query_transform_strategy)
+        if query_transform_strategy
+        else [query]
+    )
+
+    merged: Dict[str, Dict[str, Any]] = {}
+
+    def _retrieve_one(q: str) -> List[Dict[str, Any]]:
+        if retrieval_mode == "dense":
+            return retrieve_dense(q, top_k=top_k_search)
+        if retrieval_mode == "sparse":
+            return retrieve_sparse(q, top_k=top_k_search)
+        if retrieval_mode == "hybrid":
+            return retrieve_hybrid(q, top_k=top_k_search)
         raise ValueError(f"retrieval_mode không hợp lệ: {retrieval_mode}")
+
+    for q in queries:
+        partial = _retrieve_one(q)
+        for rank, cand in enumerate(partial, start=1):
+            cid = cand.get("id") or f"cand_{rank}_{len(merged)}"
+            rank_boost = 1.0 / (rank + 1)
+            merged_score = float(cand.get("score", 0.0)) + rank_boost
+
+            if cid not in merged or merged_score > float(merged[cid].get("score", 0.0)):
+                merged[cid] = {**cand, "score": merged_score, "id": cid}
+
+    candidates = sorted(merged.values(), key=lambda x: x.get("score", 0.0), reverse=True)
 
     if verbose:
         print(f"\n[RAG] Query: {query}")
+        if len(queries) > 1:
+            print(f"[RAG] Expanded queries: {queries}")
         print(f"[RAG] Retrieved {len(candidates)} candidates (mode={retrieval_mode})")
         for i, c in enumerate(candidates[:3]):
             print(f"  [{i+1}] score={c.get('score', 0):.3f} | {c['metadata'].get('source', '?')}")
@@ -519,6 +629,26 @@ def rag_answer(
 
     if verbose:
         print(f"[RAG] After select: {len(candidates)} chunks")
+
+    # --- Guardrail: nếu retrieval yếu, abstain sớm để giảm hallucination ---
+    if not candidates:
+        return {
+            "query": query,
+            "answer": "Không đủ dữ liệu trong tài liệu hiện có để trả lời câu hỏi này.",
+            "sources": [],
+            "chunks_used": [],
+            "config": config,
+        }
+
+    top_score = float(candidates[0].get("score", 0.0))
+    if retrieval_mode == "dense" and top_score < 0.15:
+        return {
+            "query": query,
+            "answer": "Không đủ dữ liệu trong tài liệu hiện có để trả lời câu hỏi này.",
+            "sources": [],
+            "chunks_used": candidates,
+            "config": config,
+        }
 
     # --- Bước 3: Build context và prompt ---
     context_block = build_context_block(candidates)
@@ -553,7 +683,6 @@ def compare_retrieval_strategies(query: str) -> None:
     """
     So sánh các retrieval strategies với cùng một query.
 
-    TODO Sprint 3:
     Chạy hàm này để thấy sự khác biệt giữa dense, sparse, hybrid.
     Dùng để justify tại sao chọn variant đó cho Sprint 3.
 
@@ -563,7 +692,7 @@ def compare_retrieval_strategies(query: str) -> None:
     print(f"Query: {query}")
     print('='*60)
 
-    strategies = ["dense", "hybrid"]  # Thêm "sparse" sau khi implement
+    strategies = ["dense", "sparse", "hybrid"]
 
     for strategy in strategies:
         print(f"\n--- Strategy: {strategy} ---")
@@ -601,24 +730,11 @@ if __name__ == "__main__":
             result = rag_answer(query, retrieval_mode="dense", verbose=True)
             print(f"Answer: {result['answer']}")
             print(f"Sources: {result['sources']}")
-        except NotImplementedError:
-            print("Chưa implement — hoàn thành TODO trong retrieve_dense() và call_llm() trước.")
         except Exception as e:
             print(f"Lỗi: {e}")
 
-    # Uncomment sau khi Sprint 3 hoàn thành:
-    # print("\n--- Sprint 3: So sánh strategies ---")
-    # compare_retrieval_strategies("Approval Matrix để cấp quyền là tài liệu nào?")
-    # compare_retrieval_strategies("ERR-403-AUTH")
+    print("\n--- Sprint 3: So sánh strategies ---")
+    compare_retrieval_strategies("Approval Matrix để cấp quyền là tài liệu nào?")
+    compare_retrieval_strategies("ERR-403-AUTH")
 
-    print("\n\nViệc cần làm Sprint 2:")
-    print("  1. Implement retrieve_dense() — query ChromaDB")
-    print("  2. Implement call_llm() — gọi OpenAI hoặc Gemini")
-    print("  3. Chạy rag_answer() với 3+ test queries")
-    print("  4. Verify: output có citation không? Câu không có docs → abstain không?")
-
-    print("\nViệc cần làm Sprint 3:")
-    print("  1. Chọn 1 trong 3 variants: hybrid, rerank, hoặc query transformation")
-    print("  2. Implement variant đó")
-    print("  3. Chạy compare_retrieval_strategies() để thấy sự khác biệt")
-    print("  4. Ghi lý do chọn biến đó vào docs/tuning-log.md")
+    print("\nHoan thanh rag_answer.py: da co dense/sparse/hybrid, rerank, query transform va grounded generation.")
