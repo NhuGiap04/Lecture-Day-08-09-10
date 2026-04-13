@@ -293,52 +293,41 @@ def _split_by_size(
     return chunks
 
 
-
 # =============================================================================
 # STEP 3: EMBED + STORE
 # Embed các chunk và lưu vào ChromaDB
 # =============================================================================
 
-def get_embedding(text: str) -> List[float]:
+def get_embedding(text: str, input_type: str = "query") -> List[float]:
     """
     Tạo embedding vector cho một đoạn text.
-
-    TODO Sprint 1:
-    Chọn một trong hai:
-
-    Option A — OpenAI Embeddings (cần OPENAI_API_KEY):
-        from openai import OpenAI
-        client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-        response = client.embeddings.create(
-            input=text,
-            model="text-embedding-3-small"
-        )
-        return response.data[0].embedding
-
-    Option B — Sentence Transformers (chạy local, không cần API key):
-        from sentence_transformers import SentenceTransformer
-        model = SentenceTransformer("paraphrase-multilingual-MiniLM-L12-v2")
-        return model.encode(text).tolist()
     """
-    raise NotImplementedError(
-        "TODO: Implement get_embedding().\n"
-        "Chọn Option A (OpenAI) hoặc Option B (Sentence Transformers) trong TODO comment."
+
+    if not api_key:
+        raise ValueError("Thiếu NVIDIA_API_KEY trong .env")
+    if not base_url:
+        raise ValueError("Thiếu NVIDIA_BASE_URL trong .env")
+
+    from openai import OpenAI
+    client = OpenAI(api_key=api_key, base_url=base_url)
+    response = client.embeddings.create(
+            input=[text],
+            model=OPENAI_EMBEDDING_MODEL,
+            encoding_format="float",
+            extra_body={"input_type": input_type, "truncate": "NONE"}
     )
 
+    return [float(value) for value in response.data[0].embedding]
 
 def build_index(docs_dir: Path = DOCS_DIR, db_dir: Path = CHROMA_DB_DIR) -> None:
     """
     Pipeline hoàn chỉnh: đọc docs → preprocess → chunk → embed → store.
 
-    TODO Sprint 1:
-    1. Cài thư viện: pip install chromadb
-    2. Khởi tạo ChromaDB client và collection
-    3. Với mỗi file trong docs_dir:
-       a. Đọc nội dung
-       b. Gọi preprocess_document()
-       c. Gọi chunk_document()
-       d. Với mỗi chunk: gọi get_embedding() và upsert vào ChromaDB
-    4. In số lượng chunk đã index
+     Đã implement đầy đủ pipeline:
+     1. Khởi tạo ChromaDB client và collection
+     2. Đọc từng file trong docs_dir
+     3. preprocess_document() → chunk_document() → embedding → upsert
+     4. In tổng số chunk đã index
 
     Gợi ý khởi tạo ChromaDB:
         import chromadb
@@ -353,9 +342,11 @@ def build_index(docs_dir: Path = DOCS_DIR, db_dir: Path = CHROMA_DB_DIR) -> None
     print(f"Đang build index từ: {docs_dir}")
     db_dir.mkdir(parents=True, exist_ok=True)
 
-    # TODO: Khởi tạo ChromaDB
-    # client = chromadb.PersistentClient(path=str(db_dir))
-    # collection = client.get_or_create_collection(...)
+    client = chromadb.PersistentClient(path=str(db_dir))
+    collection = client.get_or_create_collection(
+        name="rag_lab",
+        metadata={"hnsw:space": "cosine"},
+    )
 
     total_chunks = 0
     doc_files = list(docs_dir.glob("*.txt"))
@@ -368,32 +359,36 @@ def build_index(docs_dir: Path = DOCS_DIR, db_dir: Path = CHROMA_DB_DIR) -> None
         print(f"  Processing: {filepath.name}")
         raw_text = filepath.read_text(encoding="utf-8")
 
-        # TODO: Gọi preprocess_document
-        # doc = preprocess_document(raw_text, str(filepath))
-
-        # TODO: Gọi chunk_document
-        # chunks = chunk_document(doc)
-
-        # TODO: Embed và lưu từng chunk vào ChromaDB
-        # for i, chunk in enumerate(chunks):
-        #     chunk_id = f"{filepath.stem}_{i}"
-        #     embedding = get_embedding(chunk["text"])
-        #     collection.upsert(
-        #         ids=[chunk_id],
-        #         embeddings=[embedding],
-        #         documents=[chunk["text"]],
-        #         metadatas=[chunk["metadata"]],
-        #     )
-        # total_chunks += len(chunks)
-
-        # Placeholder để code không lỗi khi chưa implement
         doc = preprocess_document(raw_text, str(filepath))
         chunks = chunk_document(doc)
-        print(f"    → {len(chunks)} chunks (embedding chưa implement)")
-        total_chunks += len(chunks)
+        print(f"    → {len(chunks)} chunks")
+
+        ids: List[str] = []
+        embeddings: List[List[float]] = []
+        documents: List[str] = []
+        metadatas: List[Dict[str, Any]] = []
+
+        for i, chunk in enumerate(chunks):
+            chunk_text = chunk["text"].strip()
+            if not chunk_text:
+                continue
+
+            ids.append(f"{filepath.stem}_{i}")
+            documents.append(chunk_text)
+            metadatas.append(chunk["metadata"])
+            embeddings.append(get_embedding(chunk_text, input_type="passage"))
+
+        if ids:
+            collection.upsert(
+                ids=ids,
+                embeddings=embeddings,
+                documents=documents,
+                metadatas=metadatas,
+            )
+            total_chunks += len(ids)
 
     print(f"\nHoàn thành! Tổng số chunks: {total_chunks}")
-    print("Lưu ý: Embedding chưa được implement. Xem TODO trong get_embedding() và build_index().")
+    print(f"Collection 'rag_lab' hiện có {collection.count()} chunks.")
 
 
 # =============================================================================
