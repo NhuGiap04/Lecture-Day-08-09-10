@@ -22,6 +22,12 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+api_key = os.getenv("NVIDIA_API_KEY")
+base_url = os.getenv("NVIDIA_BASE_URL")
+
+OPENAI_EMBEDDING_MODEL = "nvidia/llama-nemotron-embed-1b-v2"
+
+
 # =============================================================================
 # CẤU HÌNH
 # =============================================================================
@@ -29,7 +35,7 @@ load_dotenv()
 DOCS_DIR = Path(__file__).parent / "data" / "docs"
 CHROMA_DB_DIR = Path(__file__).parent / "chroma_db"
 
-# TODO Sprint 1: Điều chỉnh chunk size và overlap theo quyết định của nhóm
+# Có thể tinh chỉnh thêm theo dữ liệu thực tế của nhóm
 # Gợi ý từ slide: chunk 300-500 tokens, overlap 50-80 tokens
 CHUNK_SIZE = 400       # tokens (ước lượng bằng số ký tự / 4)
 CHUNK_OVERLAP = 80     # tokens overlap giữa các chunk
@@ -53,14 +59,15 @@ def preprocess_document(raw_text: str, filepath: str) -> Dict[str, Any]:
           - "text": nội dung đã clean
           - "metadata": dict với source, department, effective_date, access
 
-    TODO Sprint 1:
+    Đã implement:
     - Extract metadata từ dòng đầu file (Source, Department, Effective Date, Access)
     - Bỏ các dòng header metadata khỏi nội dung chính
     - Normalize khoảng trắng, xóa ký tự rác
 
     Gợi ý: dùng regex để parse dòng "Key: Value" ở đầu file.
     """
-    lines = raw_text.strip().split("\n")
+    text = raw_text.replace("\r\n", "\n").replace("\r", "\n")
+    lines = text.strip().split("\n")
     metadata = {
         "source": filepath,
         "section": "",
@@ -71,33 +78,36 @@ def preprocess_document(raw_text: str, filepath: str) -> Dict[str, Any]:
     content_lines = []
     header_done = False
 
+    metadata_pattern = re.compile(r"^([A-Za-z ]+):\s*(.+)$")
+
     for line in lines:
+        stripped = line.strip()
         if not header_done:
-            # TODO: Parse metadata từ các dòng "Key: Value"
-            # Ví dụ: "Source: policy/refund-v4.pdf" → metadata["source"] = "policy/refund-v4.pdf"
-            if line.startswith("Source:"):
-                metadata["source"] = line.replace("Source:", "").strip()
-            elif line.startswith("Department:"):
-                metadata["department"] = line.replace("Department:", "").strip()
-            elif line.startswith("Effective Date:"):
-                metadata["effective_date"] = line.replace("Effective Date:", "").strip()
-            elif line.startswith("Access:"):
-                metadata["access"] = line.replace("Access:", "").strip()
-            elif line.startswith("==="):
+            metadata_match = metadata_pattern.match(stripped)
+            if metadata_match:
+                key = metadata_match.group(1).lower().strip().replace(" ", "_")
+                value = metadata_match.group(2).strip()
+                if key in metadata:
+                    metadata[key] = value
+                continue
+            if stripped.startswith("===") and stripped.endswith("==="):
                 # Gặp section heading đầu tiên → kết thúc header
                 header_done = True
-                content_lines.append(line)
-            elif line.strip() == "" or line.isupper():
+                content_lines.append(stripped)
+            elif stripped == "" or stripped.isupper():
                 # Dòng tên tài liệu (toàn chữ hoa) hoặc dòng trống
                 continue
+            else:
+                # Không còn ở phần metadata header
+                header_done = True
+                content_lines.append(stripped)
         else:
-            content_lines.append(line)
+            content_lines.append(line.rstrip())
 
     cleaned_text = "\n".join(content_lines)
-
-    # TODO: Thêm bước normalize text nếu cần
-    # Gợi ý: bỏ ký tự đặc biệt thừa, chuẩn hóa dấu câu
-    cleaned_text = re.sub(r"\n{3,}", "\n\n", cleaned_text)  # max 2 dòng trống liên tiếp
+    cleaned_text = re.sub(r"[ \t]+", " ", cleaned_text)
+    cleaned_text = re.sub(r"\n[ \t]+", "\n", cleaned_text)
+    cleaned_text = re.sub(r"\n{3,}", "\n\n", cleaned_text).strip()
 
     return {
         "text": cleaned_text,
@@ -326,8 +336,7 @@ def list_chunks(db_dir: Path = CHROMA_DB_DIR, n: int = 5) -> None:
     """
     In ra n chunk đầu tiên trong ChromaDB để kiểm tra chất lượng index.
 
-    TODO Sprint 1:
-    Implement sau khi hoàn thành build_index().
+    Hàm dùng để kiểm tra nhanh chất lượng index sau khi build.
     Kiểm tra:
     - Chunk có giữ đủ metadata không? (source, section, effective_date)
     - Chunk có bị cắt giữa điều khoản không?
@@ -361,7 +370,7 @@ def inspect_metadata_coverage(db_dir: Path = CHROMA_DB_DIR) -> None:
     - Có bao nhiêu chunk từ mỗi department?
     - Chunk nào thiếu effective_date?
 
-    TODO: Implement sau khi build_index() hoàn thành.
+    Đã implement kiểm tra coverage cho source/section/effective_date.
     """
     try:
         import chromadb
@@ -371,19 +380,32 @@ def inspect_metadata_coverage(db_dir: Path = CHROMA_DB_DIR) -> None:
 
         print(f"\nTổng chunks: {len(results['metadatas'])}")
 
-        # TODO: Phân tích metadata
-        # Đếm theo department, kiểm tra effective_date missing, v.v.
         departments = {}
+        access_levels = {}
+        missing_source = 0
+        missing_section = 0
         missing_date = 0
         for meta in results["metadatas"]:
             dept = meta.get("department", "unknown")
             departments[dept] = departments.get(dept, 0) + 1
+            access = meta.get("access", "unknown")
+            access_levels[access] = access_levels.get(access, 0) + 1
+
+            if meta.get("source") in ("unknown", "", None):
+                missing_source += 1
+            if meta.get("section") in ("unknown", "", None):
+                missing_section += 1
             if meta.get("effective_date") in ("unknown", "", None):
                 missing_date += 1
 
         print("Phân bố theo department:")
         for dept, count in departments.items():
             print(f"  {dept}: {count} chunks")
+        print("Phân bố theo access:")
+        for access, count in access_levels.items():
+            print(f"  {access}: {count} chunks")
+        print(f"Chunks thiếu source: {missing_source}")
+        print(f"Chunks thiếu section: {missing_section}")
         print(f"Chunks thiếu effective_date: {missing_date}")
 
     except Exception as e:
@@ -418,20 +440,19 @@ if __name__ == "__main__":
             print(f"\n  [Chunk {i+1}] Section: {chunk['metadata']['section']}")
             print(f"  Text: {chunk['text'][:150]}...")
 
-    # Bước 3: Build index (yêu cầu implement get_embedding)
+    # Bước 3: Build index (cần API key để embed)
     print("\n--- Build Full Index ---")
-    print("Lưu ý: Cần implement get_embedding() trước khi chạy bước này!")
-    # Uncomment dòng dưới sau khi implement get_embedding():
-    # build_index()
+    if api_key and base_url:
+        build_index()
 
-    # Bước 4: Kiểm tra index
-    # Uncomment sau khi build_index() thành công:
-    # list_chunks()
-    # inspect_metadata_coverage()
+        # Bước 4: Kiểm tra index
+        list_chunks()
+        inspect_metadata_coverage()
+    else:
+        print("Thiếu NVIDIA_API_KEY hoặc NVIDIA_BASE_URL trong .env, bỏ qua bước build index.")
 
     print("\nSprint 1 setup hoàn thành!")
-    print("Việc cần làm:")
-    print("  1. Implement get_embedding() - chọn OpenAI hoặc Sentence Transformers")
-    print("  2. Implement phần TODO trong build_index()")
-    print("  3. Chạy build_index() và kiểm tra với list_chunks()")
-    print("  4. Nếu chunking chưa tốt: cải thiện _split_by_size() để split theo paragraph")
+    print("Việc tiếp theo nên kiểm tra:")
+    print("  1. Chạy lại python index.py để rebuild sau khi chỉnh chunk size")
+    print("  2. Dùng list_chunks() kiểm tra section/metadata/citation quality")
+    print("  3. Nếu cần tune retrieval, chuyển sang rag_answer.py (Sprint 2)")
