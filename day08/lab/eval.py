@@ -19,6 +19,8 @@ A/B Rule (từ slide):
 
 import json
 import csv
+import re
+import os
 from pathlib import Path
 from typing import List, Dict, Any, Optional
 from datetime import datetime
@@ -30,6 +32,9 @@ from rag_answer import rag_answer
 
 TEST_QUESTIONS_PATH = Path(__file__).parent / "data" / "test_questions.json"
 RESULTS_DIR = Path(__file__).parent / "results"
+USE_LLM_JUDGE = os.getenv("USE_LLM_JUDGE", "true").lower() == "true"
+JUDGE_MODEL = os.getenv("JUDGE_MODEL", "gpt-4o")
+JUDGE_MAX_CONTEXT_CHARS = int(os.getenv("JUDGE_MAX_CONTEXT_CHARS", "5000"))
 
 # Cấu hình baseline (Sprint 2)
 BASELINE_CONFIG = {
@@ -41,13 +46,13 @@ BASELINE_CONFIG = {
 }
 
 # Cấu hình variant (Sprint 3 — điều chỉnh theo lựa chọn của nhóm)
-# TODO Sprint 4: Cập nhật VARIANT_CONFIG theo variant nhóm đã implement
 VARIANT_CONFIG = {
-    "retrieval_mode": "hybrid",   # Hoặc "dense" nếu chỉ đổi rerank
+    "retrieval_mode": "hybrid",
     "top_k_search": 10,
     "top_k_select": 3,
-    "use_rerank": True,           # Hoặc False nếu variant là hybrid không rerank
-    "label": "variant_hybrid_rerank",
+    "use_rerank": True,
+    "query_transform_strategy": "expansion",
+    "label": "variant_hybrid_rerank_qexpand",
 }
 
 
@@ -55,6 +60,132 @@ VARIANT_CONFIG = {
 # SCORING FUNCTIONS
 # 4 metrics từ slide: Faithfulness, Answer Relevance, Context Recall, Completeness
 # =============================================================================
+
+def _tokenize(text: str) -> List[str]:
+    return re.findall(r"\w+", (text or "").lower())
+
+
+def _contains_abstain(answer: str) -> bool:
+    lowered = (answer or "").lower()
+    markers = [
+        "không đủ dữ liệu",
+        "khong du du lieu",
+        "không biết",
+        "khong biet",
+        "insufficient",
+        "i don't know",
+    ]
+    return any(m in lowered for m in markers)
+
+
+def _safe_score_1_to_5(value: float) -> int:
+    return max(1, min(5, int(round(value))))
+
+
+def _call_llm_judge(prompt: str) -> Optional[Dict[str, Any]]:
+    """
+    Gọi LLM-as-a-judge và kỳ vọng output JSON:
+      {"score": <1-5>, "notes": "..."}
+    """
+    if not USE_LLM_JUDGE:
+        return None
+
+    openai_key = os.getenv("OPENAI_API_KEY")
+    if not openai_key:
+        return None
+
+    try:
+        from openai import OpenAI
+
+        client = OpenAI(api_key=openai_key)
+        response = client.chat.completions.create(
+            model=JUDGE_MODEL,
+            temperature=0,
+            max_tokens=220,
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "You are a strict evaluation judge for RAG outputs. "
+                        "Return only JSON with keys: score (int 1-5), notes (string)."
+                    ),
+                },
+                {"role": "user", "content": prompt},
+            ],
+        )
+        text = (response.choices[0].message.content or "").strip()
+        # Cố parse trực tiếp; nếu có code block thì bóc JSON trong block.
+        try:
+            parsed = json.loads(text)
+        except json.JSONDecodeError:
+            match = re.search(r"\{.*\}", text, flags=re.DOTALL)
+            parsed = json.loads(match.group(0)) if match else None
+
+        if not isinstance(parsed, dict):
+            return None
+
+        score = parsed.get("score")
+        notes = parsed.get("notes", "")
+        if score is None:
+            return None
+
+        return {
+            "score": _safe_score_1_to_5(float(score)),
+            "notes": str(notes),
+        }
+    except Exception:
+        return None
+
+
+def _judge_faithfulness_llm(answer: str, chunks_used: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    if not chunks_used:
+        return None
+
+    context_lines = []
+    for i, c in enumerate(chunks_used[:5], 1):
+        meta = c.get("metadata", {})
+        source = meta.get("source", "unknown")
+        section = meta.get("section", "")
+        text = (c.get("text", "") or "")[:1200]
+        context_lines.append(f"[{i}] {source} | {section}\n{text}")
+
+    context = "\n\n".join(context_lines)
+    context = context[:JUDGE_MAX_CONTEXT_CHARS]
+
+    prompt = (
+        "Metric: Faithfulness (1-5).\n"
+        "Definition: score 5 if answer is fully grounded in provided context, "
+        "score 1 if mostly unsupported/hallucinated.\n"
+        f"Answer:\n{answer}\n\n"
+        f"Retrieved Context:\n{context}\n\n"
+        "Return JSON only."
+    )
+    return _call_llm_judge(prompt)
+
+
+def _judge_relevance_llm(query: str, answer: str) -> Optional[Dict[str, Any]]:
+    prompt = (
+        "Metric: Answer Relevance (1-5).\n"
+        "Definition: score 5 if answer directly and correctly addresses the user question; "
+        "score 1 if irrelevant.\n"
+        f"Question:\n{query}\n\n"
+        f"Answer:\n{answer}\n\n"
+        "Return JSON only."
+    )
+    return _call_llm_judge(prompt)
+
+
+def _judge_completeness_llm(query: str, answer: str, expected_answer: str) -> Optional[Dict[str, Any]]:
+    prompt = (
+        "Metric: Completeness (1-5).\n"
+        "Definition: compare model answer vs expected answer; score 5 if key points are covered, "
+        "score 1 if most key points are missing.\n"
+        f"Question:\n{query}\n\n"
+        f"Expected Answer:\n{expected_answer}\n\n"
+        f"Model Answer:\n{answer}\n\n"
+        "Return JSON only."
+    )
+    return _call_llm_judge(prompt)
 
 def score_faithfulness(
     answer: str,
@@ -71,7 +202,7 @@ def score_faithfulness(
       2: Nhiều thông tin không có trong retrieved chunks
       1: Câu trả lời không grounded, phần lớn là model bịa
 
-    TODO Sprint 4 — Có 2 cách chấm:
+    Có thể chấm theo 2 cách:
 
     Cách 1 — Chấm thủ công (Manual, đơn giản):
         Đọc answer và chunks_used, chấm điểm theo thang trên.
@@ -88,11 +219,45 @@ def score_faithfulness(
 
     Trả về dict với: score (1-5) và notes (lý do)
     """
-    # TODO Sprint 4: Implement scoring
-    # Tạm thời trả về None (yêu cầu chấm thủ công)
+    if not answer or answer.startswith("ERROR:"):
+        return {
+            "score": 1,
+            "notes": "Không có câu trả lời hợp lệ để đánh giá faithfulness",
+        }
+
+    if _contains_abstain(answer):
+        return {
+            "score": 5,
+            "notes": "Model đã abstain, giảm nguy cơ hallucination",
+        }
+
+    if not chunks_used:
+        return {
+            "score": 1,
+            "notes": "Không có chunk nào được dùng",
+        }
+
+    judged = _judge_faithfulness_llm(answer, chunks_used)
+    if judged:
+        judged["notes"] = f"[LLM-Judge:{JUDGE_MODEL}] {judged.get('notes', '')}"
+        return judged
+
+    answer_tokens = set(_tokenize(answer))
+    context_text = "\n".join(c.get("text", "") for c in chunks_used)
+    context_tokens = set(_tokenize(context_text))
+
+    if not answer_tokens:
+        return {
+            "score": 1,
+            "notes": "Answer rỗng sau tokenize",
+        }
+
+    overlap_ratio = len(answer_tokens & context_tokens) / max(len(answer_tokens), 1)
+    score = _safe_score_1_to_5(1 + overlap_ratio * 4)
+
     return {
-        "score": None,
-        "notes": "TODO: Chấm thủ công hoặc implement LLM-as-Judge",
+        "score": score,
+        "notes": f"Token overlap answer/context = {overlap_ratio:.2f}",
     }
 
 
@@ -111,11 +276,39 @@ def score_answer_relevance(
       2: Trả lời lạc đề một phần
       1: Không trả lời câu hỏi
 
-    TODO Sprint 4: Implement tương tự score_faithfulness
     """
+    if not answer or answer.startswith("ERROR:"):
+        return {
+            "score": 1,
+            "notes": "Không có câu trả lời hợp lệ",
+        }
+
+    if _contains_abstain(answer):
+        # Abstain vẫn có thể phù hợp nếu query thiếu context, chấm trung tính-khá
+        return {
+            "score": 4,
+            "notes": "Answer dạng abstain",
+        }
+
+    judged = _judge_relevance_llm(query, answer)
+    if judged:
+        judged["notes"] = f"[LLM-Judge:{JUDGE_MODEL}] {judged.get('notes', '')}"
+        return judged
+
+    q_tokens = set(_tokenize(query))
+    a_tokens = set(_tokenize(answer))
+    if not q_tokens:
+        return {
+            "score": 3,
+            "notes": "Query không đủ token để đánh giá",
+        }
+
+    overlap_ratio = len(q_tokens & a_tokens) / len(q_tokens)
+    score = _safe_score_1_to_5(1 + overlap_ratio * 4)
+
     return {
-        "score": None,
-        "notes": "TODO: Implement score_answer_relevance",
+        "score": score,
+        "notes": f"Query-answer token overlap = {overlap_ratio:.2f}",
     }
 
 
@@ -137,10 +330,7 @@ def score_context_recall(
         retrieved_sources = ["policy/refund-v4.pdf", "helpdesk-faq.md"]
         recall = 1/2 = 0.5
 
-    TODO Sprint 4:
-    1. Lấy danh sách source từ chunks_used
-    2. Kiểm tra xem expected_sources có trong retrieved sources không
-    3. Tính recall score
+    Metric này đã được implement theo expected_sources matching.
     """
     if not expected_sources:
         # Câu hỏi không có expected source (ví dụ: "Không đủ dữ liệu" cases)
@@ -151,7 +341,7 @@ def score_context_recall(
         for c in chunks_used
     }
 
-    # TODO: Kiểm tra matching theo partial path (vì source paths có thể khác format)
+    # Matching theo partial path để chịu được khác biệt format source path.
     found = 0
     missing = []
     for expected in expected_sources:
@@ -191,16 +381,48 @@ def score_completeness(
       2: Thiếu nhiều thông tin quan trọng
       1: Thiếu phần lớn nội dung cốt lõi
 
-    TODO Sprint 4:
-    Option 1 — Chấm thủ công: So sánh answer vs expected_answer và chấm.
-    Option 2 — LLM-as-Judge:
-        "Compare the model answer with the expected answer.
-         Rate completeness 1-5. Are all key points covered?
-         Output: {'score': int, 'missing_points': [str]}"
     """
+    if not answer or answer.startswith("ERROR:"):
+        return {
+            "score": 1,
+            "notes": "Không có câu trả lời hợp lệ",
+        }
+
+    if not expected_answer:
+        return {
+            "score": 3,
+            "notes": "Không có expected_answer để đối chiếu",
+        }
+
+    if _contains_abstain(answer):
+        # Nếu expected có nguồn rỗng (khó trả lời), abstain là hợp lý hơn.
+        return {
+            "score": 4,
+            "notes": "Answer abstain; cần review thủ công cho case thiếu context",
+        }
+
+    judged = _judge_completeness_llm(query, answer, expected_answer)
+    if judged:
+        judged["notes"] = f"[LLM-Judge:{JUDGE_MODEL}] {judged.get('notes', '')}"
+        return judged
+
+    expected_tokens = set(_tokenize(expected_answer))
+    answer_tokens = set(_tokenize(answer))
+
+    if not expected_tokens:
+        return {
+            "score": 3,
+            "notes": "Expected answer không đủ token",
+        }
+
+    coverage = len(expected_tokens & answer_tokens) / len(expected_tokens)
+    score = _safe_score_1_to_5(1 + coverage * 4)
+
+    missing = sorted(list(expected_tokens - answer_tokens))[:8]
+
     return {
-        "score": None,
-        "notes": "TODO: Implement score_completeness (so sánh với expected_answer)",
+        "score": score,
+        "notes": f"Expected coverage={coverage:.2f}; missing sample={missing}",
     }
 
 
@@ -224,14 +446,7 @@ def run_scorecard(
     Returns:
         List scorecard results, mỗi item là một row
 
-    TODO Sprint 4:
-    1. Load test_questions từ data/test_questions.json
-    2. Với mỗi câu hỏi:
-       a. Gọi rag_answer() với config tương ứng
-       b. Chấm 4 metrics
-       c. Lưu kết quả
-    3. Tính average scores
-    4. In bảng kết quả
+     Hàm đã implement đầy đủ load → run pipeline → scoring → aggregate.
     """
     if test_questions is None:
         with open(TEST_QUESTIONS_PATH, "r", encoding="utf-8") as f:
@@ -263,6 +478,7 @@ def run_scorecard(
                 top_k_search=config.get("top_k_search", 10),
                 top_k_select=config.get("top_k_select", 3),
                 use_rerank=config.get("use_rerank", False),
+                query_transform_strategy=config.get("query_transform_strategy"),
                 verbose=False,
             )
             answer = result["answer"]
@@ -325,20 +541,7 @@ def compare_ab(
     """
     So sánh baseline vs variant theo từng câu hỏi và tổng thể.
 
-    TODO Sprint 4:
-    Điền vào bảng sau để trình bày trong báo cáo:
-
-    | Metric          | Baseline | Variant | Delta |
-    |-----------------|----------|---------|-------|
-    | Faithfulness    |   ?/5    |   ?/5   |  +/?  |
-    | Answer Relevance|   ?/5    |   ?/5   |  +/?  |
-    | Context Recall  |   ?/5    |   ?/5   |  +/?  |
-    | Completeness    |   ?/5    |   ?/5   |  +/?  |
-
-    Câu hỏi cần trả lời:
-    - Variant tốt hơn baseline ở câu nào? Vì sao?
-    - Biến nào (chunking / hybrid / rerank) đóng góp nhiều nhất?
-    - Có câu nào variant lại kém hơn baseline không? Tại sao?
+    Hàm in bảng so sánh baseline/variant theo metric và theo từng câu.
     """
     metrics = ["faithfulness", "relevance", "context_recall", "completeness"]
 
@@ -406,7 +609,7 @@ def generate_scorecard_summary(results: List[Dict], label: str) -> str:
     """
     Tạo báo cáo tóm tắt scorecard dạng markdown.
 
-    TODO Sprint 4: Cập nhật template này theo kết quả thực tế của nhóm.
+    Template markdown cho báo cáo scorecard.
     """
     metrics = ["faithfulness", "relevance", "context_recall", "completeness"]
     averages = {}
@@ -486,25 +689,31 @@ if __name__ == "__main__":
         print("Pipeline chưa implement. Hoàn thành Sprint 2 trước.")
         baseline_results = []
 
-    # --- Chạy Variant (sau khi Sprint 3 hoàn thành) ---
-    # TODO Sprint 4: Uncomment sau khi implement variant trong rag_answer.py
-    # print("\n--- Chạy Variant ---")
-    # variant_results = run_scorecard(
-    #     config=VARIANT_CONFIG,
-    #     test_questions=test_questions,
-    #     verbose=True,
-    # )
-    # variant_md = generate_scorecard_summary(variant_results, VARIANT_CONFIG["label"])
-    # (RESULTS_DIR / "scorecard_variant.md").write_text(variant_md, encoding="utf-8")
+    # --- Chạy Variant ---
+    print("\n--- Chạy Variant ---")
+    try:
+        variant_results = run_scorecard(
+            config=VARIANT_CONFIG,
+            test_questions=test_questions,
+            verbose=True,
+        )
+        variant_md = generate_scorecard_summary(variant_results, VARIANT_CONFIG["label"])
+        variant_path = RESULTS_DIR / "scorecard_variant.md"
+        variant_path.write_text(variant_md, encoding="utf-8")
+        print(f"\nScorecard variant lưu tại: {variant_path}")
+    except Exception as e:
+        print(f"Lỗi khi chạy variant: {e}")
+        variant_results = []
 
     # --- A/B Comparison ---
-    # TODO Sprint 4: Uncomment sau khi có cả baseline và variant
-    # if baseline_results and variant_results:
-    #     compare_ab(
-    #         baseline_results,
-    #         variant_results,
-    #         output_csv="ab_comparison.csv"
-    #     )
+    if baseline_results and variant_results:
+        compare_ab(
+            baseline_results,
+            variant_results,
+            output_csv="ab_comparison.csv"
+        )
+    else:
+        print("\nBỏ qua A/B comparison vì chưa có đủ baseline và variant results.")
 
     print("\n\nViệc cần làm Sprint 4:")
     print("  1. Hoàn thành Sprint 2 + 3 trước")
