@@ -1,0 +1,62 @@
+[
+  {
+    "id": "gq01",
+    "question": "SLA xử lý ticket P1 đã thay đổi như thế nào so với phiên bản trước?",
+    "answer": "SLA P1 trong phiên bản v2026.1 đã giảm thời gian **xử lý và khắc phục** từ 6 giờ xuống **4 giờ** (so với phiên bản trước).  \n[2]",
+    "timestamp": "2026-04-13T18:05:29.849492"
+  },
+  {
+    "id": "gq02",
+    "question": "Khi làm việc remote, tôi phải dùng VPN và được kết nối trên tối đa bao nhiêu thiết bị?",
+    "answer": "Bạn được phép kết nối VPN tối đa **2 thiết bị** cùng lúc. [1]",
+    "timestamp": "2026-04-13T18:05:29.849492"
+  },
+  {
+    "id": "gq03",
+    "question": "Đơn hàng mua trong chương trình Flash Sale và đã kích hoạt sản phẩm có được hoàn tiền không?",
+    "answer": "Không, đơn hàng mua trong chương trình Flash Sale và đã kích hoạt sản phẩm không được hoàn tiền (được liệt kê trong các ngoại lệ không được hoàn tiền). [1]",
+    "timestamp": "2026-04-13T18:05:29.849492"
+  },
+  {
+    "id": "gq04",
+    "question": "Nếu chọn nhận store credit thay vì hoàn tiền, tôi được bao nhiêu phần trăm so với số tiền gốc?",
+    "answer": "Bạn sẽ được 110% so với số tiền gốc. [1]",
+    "timestamp": "2026-04-13T18:05:29.849492"
+  },
+  {
+    "id": "gq05",
+    "question": "Contractor từ bên ngoài công ty có thể được cấp quyền Admin Access không? Nếu có, cần bao nhiêu ngày và có yêu cầu đặc biệt gì?",
+    "answer": "Không có thông tin trong tài liệu được cung cấp.",
+    "timestamp": "2026-04-13T18:05:29.849492"
+  },
+  {
+    "id": "gq06",
+    "question": "Lúc 2 giờ sáng xảy ra sự cố P1, on-call engineer cần cấp quyền tạm thời cho một engineer xử lý incident. Quy trình cụ thể như thế nào và quyền này tồn tại bao lâu?",
+    "answer": "Lúc 2 h sáng khi có sự cố P1, on‑call engineer có thể cấp quyền tạm thời cho engineer khác theo quy trình khẩn cấp:\n\n1. **Cấp quyền** – On‑call IT Admin cấp quyền tạm thời ngay lập tức.  \n2. **Phê duyệt** – Phải được Tech Lead phê duyệt bằng lời (voice).  \n3. **Ghi log** – Mọi quyền tạm thời phải được ghi log vào hệ thống Security Audit.  \n4. **Thời hạn** – Quyền tạm thời tồn tại tối đa **24 giờ**. Sau 24 giờ, phải có ticket chính thức hoặc quyền sẽ bị thu hồi tự động.  \n\n(Tham khảo: it/access‑control‑sop.md – Section 4)",
+    "timestamp": "2026-04-13T18:05:29.849492"
+  },
+  {
+    "id": "gq07",
+    "question": "Công ty sẽ phạt bao nhiêu nếu team IT vi phạm cam kết SLA P1?",
+    "answer": "Không có thông tin về mức phạt trong tài liệu được cung cấp.",
+    "timestamp": "2026-04-13T18:05:29.849492"
+  },
+  {
+    "id": "gq08",
+    "question": "Nhân viên phải báo trước bao nhiêu ngày để xin nghỉ phép năm? Con số này có giống với số ngày cần giấy tờ khi nghỉ ốm không?",
+    "answer": "Nhân viên phải báo trước **ít nhất 3 ngày làm việc** để xin nghỉ phép năm (điều 2.1).  \nĐiều này **khác** với yêu cầu giấy tờ khi nghỉ ốm: chỉ khi nghỉ ốm **trên 3 ngày liên tiếp** mới cần giấy tờ y tế, không phải là số ngày báo trước.  \n\n[1] hr/leave-policy-2026.pdf  \n[2] hr/leave-policy-2026.pdf",
+    "timestamp": "2026-04-13T18:05:29.849492"
+  },
+  {
+    "id": "gq09",
+    "question": "Mật khẩu tài khoản công ty cần đổi định kỳ không? Nếu có, hệ thống sẽ nhắc nhở trước bao nhiêu ngày và đổi qua đâu?",
+    "answer": "Mật khẩu tài khoản công ty cần đổi định kỳ.  \n- Thời gian: mỗi 90 ngày.  \n- Hệ thống sẽ nhắc nhở 7 ngày trước khi hết hạn.  \n- Đổi mật khẩu qua portal SSO (https://sso.company.internal/reset). [1]",
+    "timestamp": "2026-04-13T18:05:29.849492"
+  },
+  {
+    "id": "gq10",
+    "question": "Chính sách hoàn tiền hiện tại áp dụng cho đơn hàng đặt trước ngày 01/02/2026 không?",
+    "answer": "Không. Chính sách hoàn tiền hiện tại (phiên bản 4) chỉ áp dụng cho đơn hàng được đặt trên hệ thống nội bộ kể từ ngày 01/02/2026. Các đơn hàng đặt trước ngày 01/02/2026 sẽ được áp dụng theo chính sách hoàn tiền phiên bản 3. [1]",
+    "timestamp": "2026-04-13T18:05:29.849492"
+  }
+]

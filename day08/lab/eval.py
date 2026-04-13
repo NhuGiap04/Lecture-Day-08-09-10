@@ -61,9 +61,17 @@ VARIANT_CONFIG = {
     "retrieval_mode": "hybrid",
     "top_k_search": 10,
     "top_k_select": 3,
-    "use_rerank": False,
-    "label": "variant_hybrid",
+    "use_rerank": True,
+    "label": "variant_hybrid_rerank",
 }
+
+# VARIANT_CONFIG = {
+#     "retrieval_mode": "hybrid",
+#     "top_k_search": 10,
+#     "top_k_select": 3,
+#     "use_rerank": False,
+#     "label": "variant_hybrid",
+# }
 
 # =============================================================================
 # SCORING FUNCTIONS
@@ -726,24 +734,24 @@ if __name__ == "__main__":
     #     except Exception as e:
     #         print(f"Lỗi khi chạy variant test: {e}")
 
-    # --- 4. Chạy Scorecard cho Grading Questions (BASELINE) ---
-    print("\n" + "="*70)
-    print("PHẦN 3: ĐÁNH GIÁ GRADING QUESTIONS (BASELINE)")
-    print("="*70)
-    if grading_questions:
-        try:
-            grading_baseline_results = run_scorecard(
-                config=BASELINE_CONFIG,
-                test_questions=grading_questions,
-                verbose=True,
-            )
-            grading_baseline_md = generate_scorecard_summary(grading_baseline_results, f"grading_{BASELINE_CONFIG['label']}")
-            grading_baseline_path = RESULTS_DIR / f"scorecard_grading_{BASELINE_CONFIG['label']}.md"
-            grading_baseline_path.write_text(grading_baseline_md, encoding="utf-8")
-            print(f"\nScorecard grading baseline lưu tại: {grading_baseline_path}")
+    # # --- 4. Chạy Scorecard cho Grading Questions (BASELINE) ---
+    # print("\n" + "="*70)
+    # print("PHẦN 3: ĐÁNH GIÁ GRADING QUESTIONS (BASELINE)")
+    # print("="*70)
+    # if grading_questions:
+    #     try:
+    #         grading_baseline_results = run_scorecard(
+    #             config=BASELINE_CONFIG,
+    #             test_questions=grading_questions,
+    #             verbose=True,
+    #         )
+    #         grading_baseline_md = generate_scorecard_summary(grading_baseline_results, f"grading_{BASELINE_CONFIG['label']}")
+    #         grading_baseline_path = RESULTS_DIR / f"scorecard_grading_{BASELINE_CONFIG['label']}.md"
+    #         grading_baseline_path.write_text(grading_baseline_md, encoding="utf-8")
+    #         print(f"\nScorecard grading baseline lưu tại: {grading_baseline_path}")
 
-        except Exception as e:
-            print(f"Lỗi khi chạy grading scorecard baseline: {e}")
+    #     except Exception as e:
+    #         print(f"Lỗi khi chạy grading scorecard baseline: {e}")
 
     # --- 5. Chạy Scorecard cho Grading Questions (VARIANT) ---
     print("\n" + "="*70)
@@ -779,15 +787,15 @@ if __name__ == "__main__":
         except Exception as e:
             print(f"Lỗi khi chạy grading scorecard variant: {e}")
 
-    # --- 6. A/B Comparison ---
-    if baseline_results and variant_results:
-        compare_ab(
-            baseline_results,
-            variant_results,
-            output_csv="ab_comparison.csv"
-        )
-    else:
-        print("\nBỏ qua A/B comparison vì chưa có đủ baseline và variant results.")
+    # # --- 6. A/B Comparison ---
+    # if baseline_results and variant_results:
+    #     compare_ab(
+    #         baseline_results,
+    #         variant_results,
+    #         output_csv="ab_comparison.csv"
+    #     )
+    # else:
+    #     print("\nBỏ qua A/B comparison vì chưa có đủ baseline và variant results.")
 
     print("\n\nViệc cần làm Sprint 4:")
     print("  1. Kiểm tra các file tại: " + str(RESULTS_DIR))
