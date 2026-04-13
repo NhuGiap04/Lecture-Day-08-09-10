@@ -94,11 +94,11 @@ def retrieve_sparse(query: str, top_k: int = TOP_K_SEARCH) -> List[Dict[str, Any
     Mạnh ở: exact term, mã lỗi, tên riêng (ví dụ: "ERR-403", "P1", "refund")
     Hay hụt: câu hỏi paraphrase, đồng nghĩa
 
-    TODO Sprint 3 (nếu chọn hybrid):
-    1. Cài rank_bm25: pip install rank-bm25
-    2. Load tất cả chunks từ ChromaDB (hoặc rebuild từ docs)
-    3. Tokenize và tạo BM25Index
-    4. Query và trả về top_k kết quả
+    Đã implement BM25 retrieval:
+    1. Load tất cả chunks từ ChromaDB
+    2. Tokenize và tạo BM25Index
+    3. Query và trả về top_k kết quả
+    4. Có fallback lexical score nếu thiếu rank_bm25
 
     Gợi ý:
         from rank_bm25 import BM25Okapi
@@ -109,10 +109,64 @@ def retrieve_sparse(query: str, top_k: int = TOP_K_SEARCH) -> List[Dict[str, Any
         scores = bm25.get_scores(tokenized_query)
         top_indices = sorted(range(len(scores)), key=lambda i: scores[i], reverse=True)[:top_k]
     """
-    # TODO Sprint 3: Implement BM25 search
-    # Tạm thời return empty list
-    print("[retrieve_sparse] Chưa implement — Sprint 3")
-    return []
+    import chromadb
+    from index import CHROMA_DB_DIR
+
+    client = chromadb.PersistentClient(path=str(CHROMA_DB_DIR))
+    collection = client.get_collection("rag_lab")
+
+    # Load full corpus từ index để chạy BM25 trên documents đã chunk
+    all_rows = collection.get(include=["documents", "metadatas"])
+    ids = all_rows.get("ids", [])
+    docs = all_rows.get("documents", [])
+    metas = all_rows.get("metadatas", [])
+
+    if not docs:
+        return []
+
+    def tokenize(text: str) -> List[str]:
+        return re.findall(r"\w+", text.lower())
+
+    tokenized_corpus = [tokenize(doc) for doc in docs]
+    tokenized_query = tokenize(query)
+
+    if not tokenized_query:
+        return []
+
+    try:
+        from rank_bm25 import BM25Okapi
+
+        bm25 = BM25Okapi(tokenized_corpus)
+        bm25_scores = bm25.get_scores(tokenized_query)
+    except Exception:
+        # Fallback nhẹ khi thiếu rank_bm25: dùng overlap lexical score
+        bm25_scores = []
+        q_terms = set(tokenized_query)
+        for toks in tokenized_corpus:
+            if not toks:
+                bm25_scores.append(0.0)
+                continue
+            overlap = sum(1 for t in toks if t in q_terms)
+            bm25_scores.append(float(overlap) / max(len(q_terms), 1))
+
+    ranked_indices = sorted(
+        range(len(bm25_scores)),
+        key=lambda i: bm25_scores[i],
+        reverse=True,
+    )[:top_k]
+
+    output: List[Dict[str, Any]] = []
+    for rank, idx in enumerate(ranked_indices):
+        output.append(
+            {
+                "id": ids[idx] if idx < len(ids) else f"sparse_{rank}",
+                "text": docs[idx],
+                "metadata": metas[idx] if idx < len(metas) else {},
+                "score": float(bm25_scores[idx]),
+            }
+        )
+
+    return output
 
 
 # =============================================================================
