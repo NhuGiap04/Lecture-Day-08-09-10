@@ -31,6 +31,7 @@ from rag_answer import rag_answer
 # =============================================================================
 
 TEST_QUESTIONS_PATH = Path(__file__).parent / "data" / "test_questions.json"
+GRADING_QUESTIONS_PATH = Path(__file__).parent / "data" / "grading_questions.json"
 RESULTS_DIR = Path(__file__).parent / "results"
 USE_LLM_JUDGE = os.getenv("USE_LLM_JUDGE", "true").lower() == "true"
 JUDGE_MODEL = os.getenv("JUDGE_MODEL", "gpt-4o")
@@ -649,6 +650,50 @@ Generated: {timestamp}
 
 
 # =============================================================================
+# GRADING RUN (Custom Script)
+# =============================================================================
+
+def run_grading_run():
+    """
+    Hàm chạy bộ câu hỏi chấm điểm (grading questions) và lưu log kết quả.
+    """
+    print(f"\n{'='*70}")
+    print("Chạy Grading Run")
+    print('='*70)
+
+    # Đảm bảo thư mục logs tồn tại
+    LOGS_DIR = Path(__file__).parent / "logs"
+    LOGS_DIR.mkdir(parents=True, exist_ok=True)
+
+    if not GRADING_QUESTIONS_PATH.exists():
+        print(f"Lỗi: Không tìm thấy {GRADING_QUESTIONS_PATH}")
+        return
+
+    with open(GRADING_QUESTIONS_PATH, "r", encoding="utf-8") as f:
+        questions = json.load(f)
+
+    log = []
+    for q in questions:
+        print(f"  Processing grading ID [{q['id']}]: {q['question'][:60]}...")
+        result = rag_answer(q["question"], retrieval_mode="hybrid", verbose=False)
+        log.append({
+            "id": q["id"],
+            "question": q["question"],
+            "answer": result["answer"],
+            "sources": result["sources"],
+            "chunks_retrieved": len(result["chunks_used"]),
+            "retrieval_mode": result["config"]["retrieval_mode"],
+            "timestamp": datetime.now().isoformat(),
+        })
+
+    output_path = LOGS_DIR / "grading_run.json"
+    with open(output_path, "w", encoding="utf-8") as f:
+        json.dump(log, f, ensure_ascii=False, indent=2)
+
+    print(f"Kết quả grading run đã lưu vào: {output_path}")
+
+
+# =============================================================================
 # MAIN — Chạy evaluation
 # =============================================================================
 
@@ -719,6 +764,9 @@ if __name__ == "__main__":
         )
     else:
         print("\nBỏ qua A/B comparison vì chưa có đủ baseline và variant results.")
+
+    # --- Grading Run ---
+    run_grading_run()
 
     print("\n\nViệc cần làm Sprint 4:")
     print("  1. Hoàn thành Sprint 2 + 3 trước")
