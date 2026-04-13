@@ -132,11 +132,11 @@ def chunk_document(doc: Dict[str, Any]) -> List[Dict[str, Any]]:
           - "text": nội dung chunk
           - "metadata": metadata gốc + "section" của chunk đó
 
-    TODO Sprint 1:
+    Đã implement:
     1. Split theo heading "=== Section ... ===" hoặc "=== Phần ... ===" trước
     2. Nếu section quá dài (> CHUNK_SIZE * 4 ký tự), split tiếp theo paragraph
     3. Thêm overlap: lấy đoạn cuối của chunk trước vào đầu chunk tiếp theo
-    4. Mỗi chunk PHẢI giữ metadata đầy đủ từ tài liệu gốc
+    4. Mỗi chunk giữ metadata đầy đủ từ tài liệu gốc
 
     Gợi ý: Ưu tiên cắt tại ranh giới tự nhiên (section, paragraph)
     thay vì cắt theo token count cứng.
@@ -145,15 +145,14 @@ def chunk_document(doc: Dict[str, Any]) -> List[Dict[str, Any]]:
     base_metadata = doc["metadata"].copy()
     chunks = []
 
-    # TODO: Implement chunking theo section heading
-    # Bước 1: Split theo heading pattern "=== ... ==="
-    sections = re.split(r"(===.*?===)", text)
+    # Bước 1: Split theo heading pattern "=== ... ===" (theo từng dòng)
+    sections = re.split(r"(?m)^(===\s*.*?\s*===)\s*$", text)
 
     current_section = "General"
     current_section_text = ""
 
     for part in sections:
-        if re.match(r"===.*?===", part):
+        if re.match(r"^===\s*.*?\s*===$", part.strip()):
             # Lưu section trước (nếu có nội dung)
             if current_section_text.strip():
                 section_chunks = _split_by_size(
@@ -190,10 +189,11 @@ def _split_by_size(
     """
     Helper: Split text dài thành chunks với overlap.
 
-    TODO Sprint 1:
-    Hiện tại dùng split đơn giản theo ký tự.
-    Cải thiện: split theo paragraph (\n\n) trước, rồi mới ghép đến khi đủ size.
+    Đã implement split theo paragraph và overlap, có fallback khi paragraph quá dài.
     """
+    if overlap_chars >= chunk_chars:
+        overlap_chars = max(chunk_chars // 4, 0)
+
     if len(text) <= chunk_chars:
         # Toàn bộ section vừa một chunk
         return [{
@@ -201,28 +201,97 @@ def _split_by_size(
             "metadata": {**base_metadata, "section": section},
         }]
 
-    # TODO: Implement split theo paragraph với overlap
-    # Gợi ý:
-    # paragraphs = text.split("\n\n")
-    # Ghép paragraphs lại cho đến khi gần đủ chunk_chars
-    # Lấy overlap từ đoạn cuối chunk trước
-    chunks = []
-    start = 0
-    while start < len(text):
-        end = min(start + chunk_chars, len(text))
-        chunk_text = text[start:end]
+    paragraphs = [p.strip() for p in re.split(r"\n{2,}", text) if p.strip()]
+    if not paragraphs:
+        paragraphs = [text.strip()]
 
-        # TODO: Tìm ranh giới tự nhiên gần nhất (dấu xuống dòng, dấu chấm)
-        # thay vì cắt giữa câu
+    def split_long_paragraph(paragraph: str) -> List[str]:
+        slices: List[str] = []
+        start = 0
+        para_len = len(paragraph)
 
-        chunks.append({
+        while start < para_len:
+            end = min(start + chunk_chars, para_len)
+            if end < para_len:
+                window = paragraph[start:end]
+                # Ưu tiên cắt ở xuống dòng / cuối câu
+                cut_candidates = [
+                    window.rfind("\n"),
+                    window.rfind(". "),
+                    window.rfind("! "),
+                    window.rfind("? "),
+                    window.rfind("; "),
+                ]
+                best_cut = max(cut_candidates)
+                if best_cut > int(chunk_chars * 0.5):
+                    # +1 để giữ dấu câu/chữ cuối hợp lý
+                    end = start + best_cut + 1
+
+            piece = paragraph[start:end].strip()
+            if piece:
+                slices.append(piece)
+
+            if end >= para_len:
+                break
+
+            next_start = end - overlap_chars
+            if next_start <= start:
+                next_start = end
+            start = next_start
+
+        return slices
+
+    expanded_paragraphs: List[str] = []
+    for para in paragraphs:
+        if len(para) > chunk_chars:
+            expanded_paragraphs.extend(split_long_paragraph(para))
+        else:
+            expanded_paragraphs.append(para)
+
+    def make_chunk(chunk_text: str) -> Dict[str, Any]:
+        return {
             "text": chunk_text,
             "metadata": {**base_metadata, "section": section},
-        })
-        # Overlap: lùi lại overlap_chars để chunk sau có ngữ cảnh từ chunk trước
-        start = end - overlap_chars
+        }
+
+    def overlap_tail(chunk_text: str) -> str:
+        if overlap_chars <= 0:
+            return ""
+        tail = chunk_text[-overlap_chars:]
+        split_pos = tail.find("\n")
+        if 0 <= split_pos < len(tail) - 1:
+            tail = tail[split_pos + 1 :]
+        return tail.strip()
+
+    chunks = []
+    current_chunk = ""
+
+    for para in expanded_paragraphs:
+        candidate = f"{current_chunk}\n\n{para}".strip() if current_chunk else para
+        if len(candidate) <= chunk_chars:
+            current_chunk = candidate
+            continue
+
+        if current_chunk:
+            chunks.append(make_chunk(current_chunk))
+            tail = overlap_tail(current_chunk)
+            current_chunk = f"{tail}\n\n{para}".strip() if tail else para
+            if len(current_chunk) > chunk_chars:
+                long_parts = split_long_paragraph(current_chunk)
+                for long_part in long_parts[:-1]:
+                    chunks.append(make_chunk(long_part))
+                current_chunk = long_parts[-1] if long_parts else ""
+        else:
+            long_parts = split_long_paragraph(para)
+            for long_part in long_parts[:-1]:
+                chunks.append(make_chunk(long_part))
+            current_chunk = long_parts[-1] if long_parts else ""
+
+    if current_chunk:
+        chunks.append(make_chunk(current_chunk))
 
     return chunks
+
 
 
 # =============================================================================
