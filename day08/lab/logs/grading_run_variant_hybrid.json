@@ -1,0 +1,62 @@
+[
+  {
+    "id": "gq01",
+    "question": "SLA xử lý ticket P1 đã thay đổi như thế nào so với phiên bản trước?",
+    "answer": "SLA xử lý ticket P1 đã được rút ngắn thời gian **resolution** từ 6 giờ xuống **4 giờ** so với phiên bản trước (v2025.1). Các yếu tố khác như first response (15 phút) và escalation tự động vẫn giữ nguyên. [1][2]",
+    "timestamp": "2026-04-13T17:55:06.180033"
+  },
+  {
+    "id": "gq02",
+    "question": "Khi làm việc remote, tôi phải dùng VPN và được kết nối trên tối đa bao nhiêu thiết bị?",
+    "answer": "Bạn được phép kết nối VPN tối đa **2 thiết bị cùng lúc**. [1]",
+    "timestamp": "2026-04-13T17:55:06.180033"
+  },
+  {
+    "id": "gq03",
+    "question": "Đơn hàng mua trong chương trình Flash Sale và đã kích hoạt sản phẩm có được hoàn tiền không?",
+    "answer": "Không, đơn hàng mua trong chương trình Flash Sale và đã kích hoạt sản phẩm không được hoàn tiền.  \n[1]",
+    "timestamp": "2026-04-13T17:55:06.180033"
+  },
+  {
+    "id": "gq04",
+    "question": "Nếu chọn nhận store credit thay vì hoàn tiền, tôi được bao nhiêu phần trăm so với số tiền gốc?",
+    "answer": "Bạn sẽ được 110% so với số tiền gốc. [1]",
+    "timestamp": "2026-04-13T17:55:06.180033"
+  },
+  {
+    "id": "gq05",
+    "question": "Contractor từ bên ngoài công ty có thể được cấp quyền Admin Access không? Nếu có, cần bao nhiêu ngày và có yêu cầu đặc biệt gì?",
+    "answer": "Có, contractor bên ngoài công ty có thể được cấp quyền Admin Access.  \nQuy trình:  \n- Nhân viên (hoặc contractor) tạo ticket “Access Request” trên Jira (project IT‑ACCESS).  \n- Line Manager phê duyệt trong **1 ngày làm việc**.  \n- IT Admin kiểm tra compliance và cấp quyền, sau đó IT Security thực hiện review (Level 3 & 4).  \n- Khi quyền được cấp, nhân viên nhận thông báo qua email.  \n\nKhông có yêu cầu đặc biệt nào khác ngoài các bước chuẩn trong quy trình cấp quyền. [2]",
+    "timestamp": "2026-04-13T17:55:06.180033"
+  },
+  {
+    "id": "gq06",
+    "question": "Lúc 2 giờ sáng xảy ra sự cố P1, on-call engineer cần cấp quyền tạm thời cho một engineer xử lý incident. Quy trình cụ thể như thế nào và quyền này tồn tại bao lâu?",
+    "answer": "Lúc 2 h sáng, khi xảy ra sự cố P1, on‑call engineer phải:\n\n1. **Nhận sự cho phép**: Yêu cầu Tech Lead phê duyệt bằng lời cho việc cấp quyền tạm thời.  \n2. **Cấp quyền**: On‑call IT Admin cấp quyền tạm thời cho engineer xử lý (điều kiện: chỉ áp dụng khi cần thay đổi quyền hệ thống ngoài quy trình thông thường).  \n3. **Ghi log**: Ghi lại toàn bộ quyền tạm thời vào hệ thống Security Audit.  \n4. **Thời hạn**: Quyền tạm thời tồn tại tối đa **24 giờ**; sau 24 h, phải có ticket chính thức hoặc quyền sẽ bị thu hồi tự động.  \n\n(Tham khảo: it/access‑control‑sop.md – Section 4)",
+    "timestamp": "2026-04-13T17:55:06.180033"
+  },
+  {
+    "id": "gq07",
+    "question": "Công ty sẽ phạt bao nhiêu nếu team IT vi phạm cam kết SLA P1?",
+    "answer": "Không có thông tin về mức phạt trong tài liệu được cung cấp.",
+    "timestamp": "2026-04-13T17:55:06.180033"
+  },
+  {
+    "id": "gq08",
+    "question": "Nhân viên phải báo trước bao nhiêu ngày để xin nghỉ phép năm? Con số này có giống với số ngày cần giấy tờ khi nghỉ ốm không?",
+    "answer": "Nhân viên phải báo trước **3 ngày làm việc** để xin nghỉ phép năm (Bước 1 của quy trình xin nghỉ phép) [2].  \nĐiều này **không giống** với quy định về giấy tờ khi nghỉ ốm: chỉ khi nghỉ **trên 3 ngày liên tiếp** mới cần giấy tờ y tế, và không có yêu cầu báo trước số ngày cụ thể, chỉ phải thông báo cho Line Manager trước 9:00 sáng ngày nghỉ [1].",
+    "timestamp": "2026-04-13T17:55:06.180033"
+  },
+  {
+    "id": "gq09",
+    "question": "Mật khẩu tài khoản công ty cần đổi định kỳ không? Nếu có, hệ thống sẽ nhắc nhở trước bao nhiêu ngày và đổi qua đâu?",
+    "answer": "Mật khẩu tài khoản công ty **cần được thay đổi định kỳ**.  \n- **Thời gian**: mỗi 90 ngày.  \n- **Nhắc nhở**: hệ thống sẽ gửi thông báo 7 ngày trước khi hết hạn.  \n- **Đổi mật khẩu**: thực hiện qua cổng SSO (địa chỉ https://sso.company.internal/reset). [1]",
+    "timestamp": "2026-04-13T17:55:06.180033"
+  },
+  {
+    "id": "gq10",
+    "question": "Chính sách hoàn tiền hiện tại áp dụng cho đơn hàng đặt trước ngày 01/02/2026 không?",
+    "answer": "Không, chính sách hoàn tiền hiện tại (phiên bản 4) không áp dụng cho đơn hàng đặt trước ngày 01/02/2026. Những đơn hàng đặt trước ngày đó sẽ được áp dụng theo chính sách hoàn tiền phiên bản 3. [1]",
+    "timestamp": "2026-04-13T17:55:06.180033"
+  }
+]
