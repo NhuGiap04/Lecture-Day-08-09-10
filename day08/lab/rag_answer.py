@@ -22,6 +22,7 @@ Definition of Done Sprint 3:
 """
 
 import os
+import re
 from typing import List, Dict, Any, Optional, Tuple
 from dotenv import load_dotenv
 
@@ -35,6 +36,7 @@ TOP_K_SEARCH = 10    # Số chunk lấy từ vector store trước rerank (searc
 TOP_K_SELECT = 3     # Số chunk gửi vào prompt sau rerank/select (top-3 sweet spot)
 
 LLM_MODEL = os.getenv("LLM_MODEL", "gpt-4o-mini")
+LLM_PROVIDER = os.getenv("LLM_PROVIDER", "openai").lower()
 
 
 # =============================================================================
@@ -122,11 +124,11 @@ def retrieve_sparse(query: str, top_k: int = TOP_K_SEARCH) -> List[Dict[str, Any
     Mạnh ở: exact term, mã lỗi, tên riêng (ví dụ: "ERR-403", "P1", "refund")
     Hay hụt: câu hỏi paraphrase, đồng nghĩa
 
-    TODO Sprint 3 (nếu chọn hybrid):
-    1. Cài rank_bm25: pip install rank-bm25
-    2. Load tất cả chunks từ ChromaDB (hoặc rebuild từ docs)
-    3. Tokenize và tạo BM25Index
-    4. Query và trả về top_k kết quả
+    Đã implement BM25 retrieval:
+    1. Load tất cả chunks từ ChromaDB
+    2. Tokenize và tạo BM25Index
+    3. Query và trả về top_k kết quả
+    4. Có fallback lexical score nếu thiếu rank_bm25
 
     Gợi ý:
         from rank_bm25 import BM25Okapi
@@ -137,10 +139,64 @@ def retrieve_sparse(query: str, top_k: int = TOP_K_SEARCH) -> List[Dict[str, Any
         scores = bm25.get_scores(tokenized_query)
         top_indices = sorted(range(len(scores)), key=lambda i: scores[i], reverse=True)[:top_k]
     """
-    # TODO Sprint 3: Implement BM25 search
-    # Tạm thời return empty list
-    print("[retrieve_sparse] Chưa implement — Sprint 3")
-    return []
+    import chromadb
+    from index import CHROMA_DB_DIR
+
+    client = chromadb.PersistentClient(path=str(CHROMA_DB_DIR))
+    collection = client.get_collection("rag_lab")
+
+    # Load full corpus từ index để chạy BM25 trên documents đã chunk
+    all_rows = collection.get(include=["documents", "metadatas"])
+    ids = all_rows.get("ids", [])
+    docs = all_rows.get("documents", [])
+    metas = all_rows.get("metadatas", [])
+
+    if not docs:
+        return []
+
+    def tokenize(text: str) -> List[str]:
+        return re.findall(r"\w+", text.lower())
+
+    tokenized_corpus = [tokenize(doc) for doc in docs]
+    tokenized_query = tokenize(query)
+
+    if not tokenized_query:
+        return []
+
+    try:
+        from rank_bm25 import BM25Okapi
+
+        bm25 = BM25Okapi(tokenized_corpus)
+        bm25_scores = bm25.get_scores(tokenized_query)
+    except Exception:
+        # Fallback nhẹ khi thiếu rank_bm25: dùng overlap lexical score
+        bm25_scores = []
+        q_terms = set(tokenized_query)
+        for toks in tokenized_corpus:
+            if not toks:
+                bm25_scores.append(0.0)
+                continue
+            overlap = sum(1 for t in toks if t in q_terms)
+            bm25_scores.append(float(overlap) / max(len(q_terms), 1))
+
+    ranked_indices = sorted(
+        range(len(bm25_scores)),
+        key=lambda i: bm25_scores[i],
+        reverse=True,
+    )[:top_k]
+
+    output: List[Dict[str, Any]] = []
+    for rank, idx in enumerate(ranked_indices):
+        output.append(
+            {
+                "id": ids[idx] if idx < len(ids) else f"sparse_{rank}",
+                "text": docs[idx],
+                "metadata": metas[idx] if idx < len(metas) else {},
+                "score": float(bm25_scores[idx]),
+            }
+        )
+
+    return output
 
 
 # =============================================================================
@@ -163,23 +219,38 @@ def retrieve_hybrid(
         dense_weight: Trọng số cho dense score (0-1)
         sparse_weight: Trọng số cho sparse score (0-1)
 
-    TODO Sprint 3 (nếu chọn hybrid):
-    1. Chạy retrieve_dense() → dense_results
-    2. Chạy retrieve_sparse() → sparse_results
-    3. Merge bằng RRF:
+     Đã implement:
+     1. Chạy retrieve_dense() → dense_results
+     2. Chạy retrieve_sparse() → sparse_results
+     3. Merge bằng RRF:
        RRF_score(doc) = dense_weight * (1 / (60 + dense_rank)) +
                         sparse_weight * (1 / (60 + sparse_rank))
        60 là hằng số RRF tiêu chuẩn
-    4. Sort theo RRF score giảm dần, trả về top_k
+     4. Sort theo RRF score giảm dần, trả về top_k
 
     Khi nào dùng hybrid (từ slide):
     - Corpus có cả câu tự nhiên VÀ tên riêng, mã lỗi, điều khoản
     - Query như "Approval Matrix" khi doc đổi tên thành "Access Control SOP"
     """
-    # TODO Sprint 3: Implement hybrid RRF
-    # Tạm thời fallback về dense
-    print("[retrieve_hybrid] Chưa implement RRF — fallback về dense")
-    return retrieve_dense(query, top_k)
+    dense_results = retrieve_dense(query, top_k=top_k)
+    sparse_results = retrieve_sparse(query, top_k=top_k)
+
+    k_rrf = 60
+    merged: Dict[str, Dict[str, Any]] = {}
+
+    for rank, item in enumerate(dense_results, start=1):
+        doc_id = item.get("id") or f"dense_{rank}"
+        merged.setdefault(doc_id, {**item, "score": 0.0})
+        merged[doc_id]["score"] += dense_weight * (1.0 / (k_rrf + rank))
+
+    for rank, item in enumerate(sparse_results, start=1):
+        doc_id = item.get("id") or f"sparse_{rank}"
+        if doc_id not in merged:
+            merged[doc_id] = {**item, "score": 0.0}
+        merged[doc_id]["score"] += sparse_weight * (1.0 / (k_rrf + rank))
+
+    ranked = sorted(merged.values(), key=lambda x: x.get("score", 0.0), reverse=True)
+    return ranked[:top_k]
 
 
 # =============================================================================
@@ -201,7 +272,7 @@ def rerank(
     Funnel logic (từ slide):
       Search rộng (top-20) → Rerank (top-6) → Select (top-3)
 
-    TODO Sprint 3 (nếu chọn rerank):
+    Đã implement rerank nhẹ:
     Option A — Cross-encoder:
         from sentence_transformers import CrossEncoder
         model = CrossEncoder("cross-encoder/ms-marco-MiniLM-L-6-v2")
@@ -217,9 +288,36 @@ def rerank(
     - Dense/hybrid trả về nhiều chunk nhưng có noise
     - Muốn chắc chắn chỉ 3-5 chunk tốt nhất vào prompt
     """
-    # TODO Sprint 3: Implement rerank
-    # Tạm thời trả về top_k đầu tiên (không rerank)
-    return candidates[:top_k]
+    def tokenize(text: str) -> List[str]:
+        return re.findall(r"\w+", text.lower())
+
+    q_tokens = set(tokenize(query))
+    if not q_tokens:
+        return candidates[:top_k]
+
+    rescored: List[Tuple[Dict[str, Any], float]] = []
+    for c in candidates:
+        text = c.get("text", "")
+        c_tokens = tokenize(text)
+        if not c_tokens:
+            lexical = 0.0
+        else:
+            overlap = len([tok for tok in c_tokens if tok in q_tokens])
+            lexical = overlap / len(q_tokens)
+
+        dense_score = float(c.get("score", 0.0))
+        final_score = 0.7 * dense_score + 0.3 * lexical
+        rescored.append((c, final_score))
+
+    rescored.sort(key=lambda x: x[1], reverse=True)
+
+    output: List[Dict[str, Any]] = []
+    for c, s in rescored[:top_k]:
+        updated = dict(c)
+        updated["score"] = float(s)
+        output.append(updated)
+
+    return output
 
 
 # =============================================================================
