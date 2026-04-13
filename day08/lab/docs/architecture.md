@@ -65,8 +65,8 @@ Pipeline được thiết kế theo hướng grounded-answer: chỉ trả lời 
 | Strategy | Hybrid (Dense + Sparse BM25, fuse bằng RRF) | Từ dense-only sang kết hợp semantic + keyword |
 | Top-k search | 10 | Giữ nguyên để cô lập tác động từ retrieval strategy/rerank/query transform |
 | Top-k select | 3 | Giữ nguyên để ổn định chi phí prompt và so sánh công bằng |
-| Rerank | Có (light rerank lexical+dense, top-3) | Bật rerank sau bước search rộng để giảm noise |
-| Query transform | Expansion | Thêm query biến thể/alias trước khi retrieve |
+| Rerank | Không | Giữ nguyên |
+| Query transform | None | Giữ nguyên |
 
 **Lý do chọn variant này:**
 Chọn variant `hybrid + rerank + query expansion` vì corpus có cả mô tả ngôn ngữ tự nhiên (policy/SLA) lẫn alias và keyword đặc thù (ví dụ "Approval Matrix", ticket terms).  
