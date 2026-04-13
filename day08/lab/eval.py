@@ -91,13 +91,16 @@ def _call_llm_judge(prompt: str) -> Optional[Dict[str, Any]]:
         return None
 
     openai_key = os.getenv("OPENAI_API_KEY")
-    if not openai_key:
-        return None
+    nvidia_api_key = os.getenv("NVIDIA_API_KEY")
+    nvidia_base_url = os.getenv("NVIDIA_BASE_URL")
+
+    # if not openai_key:
+    #     return None
 
     try:
         from openai import OpenAI
 
-        client = OpenAI(api_key=openai_key)
+        client = OpenAI(api_key=nvidia_api_key, base_url=nvidia_base_url)
         response = client.chat.completions.create(
             model=JUDGE_MODEL,
             temperature=0,
@@ -239,9 +242,11 @@ def score_faithfulness(
 
     judged = _judge_faithfulness_llm(answer, chunks_used)
     if judged:
+        print("Using LLM-as-a-Judge")
         judged["notes"] = f"[LLM-Judge:{JUDGE_MODEL}] {judged.get('notes', '')}"
         return judged
 
+    print("Using heuristic evaluation")
     answer_tokens = set(_tokenize(answer))
     context_text = "\n".join(c.get("text", "") for c in chunks_used)
     context_tokens = set(_tokenize(context_text))
