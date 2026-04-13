@@ -47,15 +47,23 @@ BASELINE_CONFIG = {
 }
 
 # Cấu hình variant (Sprint 3 — điều chỉnh theo lựa chọn của nhóm)
+
+# VARIANT_CONFIG = {
+#     "retrieval_mode": "hybrid",
+#     "top_k_search": 10,
+#     "top_k_select": 3,
+#     "use_rerank": True,
+#     "query_transform_strategy": "expansion",
+#     "label": "variant_hybrid_rerank_qexpand",
+# }
+
 VARIANT_CONFIG = {
     "retrieval_mode": "hybrid",
     "top_k_search": 10,
     "top_k_select": 3,
-    "use_rerank": True,
-    "query_transform_strategy": "expansion",
-    "label": "variant_hybrid_rerank_qexpand",
+    "use_rerank": False,
+    "label": "variant_hybrid",
 }
-
 
 # =============================================================================
 # SCORING FUNCTIONS
@@ -649,49 +657,6 @@ Generated: {timestamp}
     return md
 
 
-# =============================================================================
-# GRADING RUN (Custom Script)
-# =============================================================================
-
-def run_grading_run():
-    """
-    Hàm chạy bộ câu hỏi chấm điểm (grading questions) và lưu log kết quả.
-    """
-    print(f"\n{'='*70}")
-    print("Chạy Grading Run")
-    print('='*70)
-
-    # Đảm bảo thư mục logs tồn tại
-    LOGS_DIR = Path(__file__).parent / "logs"
-    LOGS_DIR.mkdir(parents=True, exist_ok=True)
-
-    if not GRADING_QUESTIONS_PATH.exists():
-        print(f"Lỗi: Không tìm thấy {GRADING_QUESTIONS_PATH}")
-        return
-
-    with open(GRADING_QUESTIONS_PATH, "r", encoding="utf-8") as f:
-        questions = json.load(f)
-
-    log = []
-    for q in questions:
-        print(f"  Processing grading ID [{q['id']}]: {q['question'][:60]}...")
-        result = rag_answer(q["question"], retrieval_mode="hybrid", verbose=False)
-        log.append({
-            "id": q["id"],
-            "question": q["question"],
-            "answer": result["answer"],
-            "sources": result["sources"],
-            "chunks_retrieved": len(result["chunks_used"]),
-            "retrieval_mode": result["config"]["retrieval_mode"],
-            "timestamp": datetime.now().isoformat(),
-        })
-
-    output_path = LOGS_DIR / "grading_run.json"
-    with open(output_path, "w", encoding="utf-8") as f:
-        json.dump(log, f, ensure_ascii=False, indent=2)
-
-    print(f"Kết quả grading run đã lưu vào: {output_path}")
-
 
 # =============================================================================
 # MAIN — Chạy evaluation
@@ -702,60 +667,100 @@ if __name__ == "__main__":
     print("Sprint 4: Evaluation & Scorecard")
     print("=" * 60)
 
-    # Kiểm tra test questions
+    # --- 1. Load Data ---
     print(f"\nLoading test questions từ: {TEST_QUESTIONS_PATH}")
     try:
         with open(TEST_QUESTIONS_PATH, "r", encoding="utf-8") as f:
             test_questions = json.load(f)
-        print(f"Tìm thấy {len(test_questions)} câu hỏi")
-
-        # In preview
-        for q in test_questions[:3]:
-            print(f"  [{q['id']}] {q['question']} ({q['category']})")
-        print("  ...")
-
+        print(f"Tìm thấy {len(test_questions)} câu hỏi test")
     except FileNotFoundError:
         print("Không tìm thấy file test_questions.json!")
         test_questions = []
 
-    # --- Chạy Baseline ---
-    print("\n--- Chạy Baseline ---")
-    print("Lưu ý: Cần hoàn thành Sprint 2 trước khi chạy scorecard!")
+    print(f"Loading grading questions từ: {GRADING_QUESTIONS_PATH}")
     try:
-        baseline_results = run_scorecard(
-            config=BASELINE_CONFIG,
-            test_questions=test_questions,
-            verbose=True,
-        )
+        with open(GRADING_QUESTIONS_PATH, "r", encoding="utf-8") as f:
+            grading_questions = json.load(f)
+        print(f"Tìm thấy {len(grading_questions)} câu hỏi chấm điểm")
+    except FileNotFoundError:
+        print("Không tìm thấy file grading_questions.json!")
+        grading_questions = []
 
-        # Save scorecard
-        RESULTS_DIR.mkdir(parents=True, exist_ok=True)
-        baseline_md = generate_scorecard_summary(baseline_results, "baseline_dense")
-        scorecard_path = RESULTS_DIR / "scorecard_baseline.md"
-        scorecard_path.write_text(baseline_md, encoding="utf-8")
-        print(f"\nScorecard lưu tại: {scorecard_path}")
+    # --- 2. Chạy Baseline cho Test Questions ---
+    print("\n" + "="*70)
+    print("PHẦN 1: ĐÁNH GIÁ TEST QUESTIONS (BASELINE)")
+    print("="*70)
+    baseline_results = []
+    if test_questions:
+        try:
+            baseline_results = run_scorecard(
+                config=BASELINE_CONFIG,
+                test_questions=test_questions,
+                verbose=True,
+            )
+            # Save scorecard test baseline
+            RESULTS_DIR.mkdir(parents=True, exist_ok=True)
+            baseline_md = generate_scorecard_summary(baseline_results, "test_baseline_dense")
+            scorecard_path = RESULTS_DIR / "scorecard_test_baseline.md"
+            scorecard_path.write_text(baseline_md, encoding="utf-8")
+            print(f"\nScorecard test baseline lưu tại: {scorecard_path}")
+        except NotImplementedError:
+            print("Pipeline chưa implement cho Baseline.")
 
-    except NotImplementedError:
-        print("Pipeline chưa implement. Hoàn thành Sprint 2 trước.")
-        baseline_results = []
+    # --- 3. Chạy Variant cho Test Questions ---
+    print("\n" + "="*70)
+    print("PHẦN 2: ĐÁNH GIÁ TEST QUESTIONS (VARIANT)")
+    print("="*70)
+    variant_results = []
+    if test_questions:
+        try:
+            variant_results = run_scorecard(
+                config=VARIANT_CONFIG,
+                test_questions=test_questions,
+                verbose=True,
+            )
+            variant_md = generate_scorecard_summary(variant_results, f"test_{VARIANT_CONFIG['label']}")
+            variant_path = RESULTS_DIR / "scorecard_test_variant.md"
+            variant_path.write_text(variant_md, encoding="utf-8")
+            print(f"\nScorecard test variant lưu tại: {variant_path}")
+        except Exception as e:
+            print(f"Lỗi khi chạy variant test: {e}")
 
-    # --- Chạy Variant ---
-    print("\n--- Chạy Variant ---")
-    try:
-        variant_results = run_scorecard(
-            config=VARIANT_CONFIG,
-            test_questions=test_questions,
-            verbose=True,
-        )
-        variant_md = generate_scorecard_summary(variant_results, VARIANT_CONFIG["label"])
-        variant_path = RESULTS_DIR / "scorecard_variant.md"
-        variant_path.write_text(variant_md, encoding="utf-8")
-        print(f"\nScorecard variant lưu tại: {variant_path}")
-    except Exception as e:
-        print(f"Lỗi khi chạy variant: {e}")
-        variant_results = []
+    # --- 4. Chạy Scorecard cho Grading Questions ---
+    print("\n" + "="*70)
+    print("PHẦN 3: ĐÁNH GIÁ GRADING QUESTIONS")
+    print("="*70)
+    if grading_questions:
+        try:
+            grading_results = run_scorecard(
+                config=VARIANT_CONFIG,
+                test_questions=grading_questions,
+                verbose=True,
+            )
+            grading_md = generate_scorecard_summary(grading_results, f"grading_{VARIANT_CONFIG['label']}")
+            grading_path = RESULTS_DIR / "scorecard_grading.md"
+            grading_path.write_text(grading_md, encoding="utf-8")
+            print(f"\nScorecard grading lưu tại: {grading_path}")
 
-    # --- A/B Comparison ---
+            # Lưu log JSON bổ trợ như user yêu cầu lúc đầu
+            LOGS_DIR = Path(__file__).parent / "logs"
+            LOGS_DIR.mkdir(parents=True, exist_ok=True)
+            grading_log = []
+            for r in grading_results:
+                grading_log.append({
+                    "id": r["id"],
+                    "question": r["query"],
+                    "answer": r["answer"],
+                    "timestamp": datetime.now().isoformat(),
+                })
+            log_path = LOGS_DIR / "grading_run.json"
+            with open(log_path, "w", encoding="utf-8") as f:
+                json.dump(grading_log, f, ensure_ascii=False, indent=2)
+
+        except Exception as e:
+            print(f"Lỗi khi chạy grading scorecard: {e}")
+
+    # --- 5. A/B Comparison ---
     if baseline_results and variant_results:
         compare_ab(
             baseline_results,
@@ -765,13 +770,7 @@ if __name__ == "__main__":
     else:
         print("\nBỏ qua A/B comparison vì chưa có đủ baseline và variant results.")
 
-    # --- Grading Run ---
-    run_grading_run()
-
     print("\n\nViệc cần làm Sprint 4:")
-    print("  1. Hoàn thành Sprint 2 + 3 trước")
-    print("  2. Chấm điểm thủ công hoặc implement LLM-as-Judge trong score_* functions")
-    print("  3. Chạy run_scorecard(BASELINE_CONFIG)")
-    print("  4. Chạy run_scorecard(VARIANT_CONFIG)")
-    print("  5. Gọi compare_ab() để thấy delta")
-    print("  6. Cập nhật docs/tuning-log.md với kết quả và nhận xét")
+    print("  1. Kiểm tra các file tại: " + str(RESULTS_DIR))
+    print("  2. So sánh scorecard_test_baseline.md vs scorecard_test_variant.md")
+    print("  3. Review scorecard_grading.md cho kết quả chính thức")
