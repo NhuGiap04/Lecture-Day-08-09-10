@@ -69,8 +69,9 @@ Pipeline được thiết kế theo hướng grounded-answer: chỉ trả lời 
 | Query transform | None | Giữ nguyên |
 
 **Lý do chọn variant này:**
-Chọn variant `hybrid + rerank + query expansion` vì corpus có cả mô tả ngôn ngữ tự nhiên (policy/SLA) lẫn alias và keyword đặc thù (ví dụ "Approval Matrix", ticket terms).  
-Kết quả A/B hiện tại cho thấy `Faithfulness` tăng từ **4.40 → 4.60** và `Completeness` tăng từ **3.40 → 3.70**, trong khi `Context Recall` giữ ở **5.00**; đổi lại `Relevance` giảm nhẹ từ **4.50 → 4.30**, nên biến này phù hợp khi ưu tiên độ bám chứng cứ.
+Chọn variant `hybrid` thuần (không rerank, không query transform) để kiểm chứng rõ tác động của riêng retrieval strategy theo đúng A/B rule: chỉ đổi một biến mỗi lần.  
+Corpus gồm cả đoạn mô tả tự nhiên (policy/SLA) và keyword đặc thù (tên tài liệu cũ, cụm kỹ thuật), nên kết hợp Dense + BM25 giúp tăng khả năng bắt được cả ngữ nghĩa lẫn exact-term mà vẫn giữ pipeline đơn giản, chi phí thấp và dễ debug.
+
 
 ---
 
